@@ -12,6 +12,7 @@
 #include "src/sensors/sensors.h"             // sensorsBegin / sensorsPresent / sensorsRead
 #include "src/web_ui/web_ui.h"               // webBegin / webHandle / webTodo*
 #include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
+#include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -20,8 +21,9 @@
 #define RLCD_CS_PIN 40
 #define RLCD_RST_PIN 41
 
-// ---------- KEY button ----------
-#define KEY_PIN 18  // active low (confirmed from Waveshare button_bsp)
+// ---------- buttons (active-low; see Waveshare button_bsp) ----------
+#define KEY_PIN 18   // "GP18" button
+#define BOOT_PIN 0   // BOOT button; also the download strapping pin. Unused for now.
 
 #define DISP_W 400
 #define DISP_H 300
@@ -168,47 +170,52 @@ void drawScreen() {
   const int lineW = DISP_W - 8 - mx;  // full-width lines run from mx to the to-do box's right edge
 
   u8g2->setFont(u8g2_font_6x13_tf);
-  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 34, buf);
-  else u8g2->drawStr(mx, 34, "Syncing time...");
-  u8g2->drawHLine(mx, 40, lineW);
+  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 24, buf);
+  else u8g2->drawStr(mx, 24, "Syncing time...");
+  u8g2->drawHLine(mx, 30, lineW);
 
   // Temperature + humidity, small, tucked into the upper-left under the date.
   // Both icons are drawn from their left edge, but the thermometer bulb (r=h/6) is
   // narrower than the droplet (r=h/3); offset each so they share one center column.
   const int icoH = 22, icoCx = mx + 14;  // ~80% icon; shares a center column with the droplet
-  drawThermometer(icoCx - icoH / 6, 50, icoH);
+  drawThermometer(icoCx - icoH / 6, 40, icoH);
   u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastTemp)) snprintf(buf, sizeof(buf), "%.1f C", lastTemp);
   else snprintf(buf, sizeof(buf), "-- C");
-  u8g2->drawStr(mx + 33, 72, buf);
+  u8g2->drawStr(mx + 33, 62, buf);
 
-  drawDroplet(icoCx - icoH / 3, 82, icoH);
+  drawDroplet(icoCx - icoH / 3, 72, icoH);
   u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastHum)) snprintf(buf, sizeof(buf), "%.1f %%", lastHum);
   else snprintf(buf, sizeof(buf), "-- %%");
-  u8g2->drawStr(mx + 33, 104, buf);
+  u8g2->drawStr(mx + 33, 94, buf);
 
   // To-do box to the right of the temp/humidity column.
-  drawTodoBox(190, 48, DISP_W - 190 - 8, 130);
+  drawTodoBox(190, 38, DISP_W - 190 - 8, 130);
 
   // Separator under the temp/humidity column — left column only, clear of the to-do box.
-  u8g2->drawHLine(mx, 112, 150);
+  u8g2->drawHLine(mx, 102, 150);
 
   // Weather: one horizontal temperature-gauge row per city.
-  int wy = 118;
+  int wy = 108;
   for (int i = 0; i < NUM_CITIES; i++) {
     drawWeatherRow(mx, wy, 150, cities[i]);
     wy += 28;
   }
 
   // Divider below the main content (weather column + to-do box).
-  u8g2->drawHLine(mx, 182, lineW);
+  u8g2->drawHLine(mx, 172, lineW);
 
   // Claude usage, just below the second full divider.
   u8g2->setFont(u8g2_font_6x12_tf);
-  u8g2->drawStr(mx, 197, "Claude usage");
-  drawUsageBar(mx, 205, lineW, "5h", claudeFiveHour());
-  drawUsageBar(mx, 221, lineW, "7d", claudeSevenDay());
+  u8g2->drawStr(mx, 187, "Claude usage");
+  // Mascot on the left; the two gauges are shifted right to make room for it.
+  const int clawdGap = 6;
+  const int gaugeX = mx + CLAWD_ICON_W + clawdGap;
+  const int gaugeW = lineW - (CLAWD_ICON_W + clawdGap);
+  u8g2->drawXBMP(mx, 207 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
+  drawUsageBar(gaugeX, 195, gaugeW, "5h", claudeFiveHour());
+  drawUsageBar(gaugeX, 211, gaugeW, "7d", claudeSevenDay());
 
   // Wi-Fi footer pinned to the bottom, with a divider right above it.
   u8g2->drawHLine(mx, 283, lineW);
