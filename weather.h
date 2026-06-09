@@ -5,6 +5,8 @@ struct City {
   const char *name;
   float lat, lon, cur, hi, lo;
   bool ok;
+  int code;    // WMO weather-interpretation code for the current condition (-1 = unknown)
+  float wind;  // current wind speed, km/h
 };
 
 extern City cities[];
