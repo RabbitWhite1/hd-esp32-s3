@@ -20,12 +20,14 @@ This is a plain Arduino sketch — build with `arduino-cli` or the Arduino IDE, 
 
 - **The sketch folder name must match the `.ino` name.** The file on disk is `hd-esp32-s3.ino` inside the `hd-esp32-s3/` folder. (The initial git commit still tracks the old name `hd.ino`; the working tree has been renamed.)
 - Target board: ESP32-S3. **PSRAM must be enabled** — the codec echo task allocates with `MALLOC_CAP_SPIRAM`.
+- The board has **16 MB flash**, so build with `FlashSize=16M` and a 16 MB partition scheme. Use `PartitionScheme=app3M_fat9M_16MB` (3 MB app partition) — the default scheme only gives ~1.25 MB of app space, which the firmware already nearly fills. With the 3 MB partition the sketch sits around 40%.
 
-Typical commands (adjust the port):
+Typical commands (adjust the port). Define the FQBN once so compile/upload agree:
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:esp32s3:PSRAM=enabled .
-arduino-cli upload  --fqbn esp32:esp32:esp32s3:PSRAM=enabled -p /dev/ttyACM0 .
+FQBN=esp32:esp32:esp32s3:PSRAM=enabled,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB
+arduino-cli compile --fqbn "$FQBN" .
+arduino-cli upload  --fqbn "$FQBN" -p /dev/ttyACM0 .
 arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200   # Serial logs are 115200
 ```
 
@@ -54,7 +56,7 @@ The sketch (`hd-esp32-s3.ino`) holds **most frontend**: the `drawScreen` composi
 
 | Module | Responsibility | Key API |
 |--------|----------------|---------|
-| `wifi_net.*` | STA connect/reconnect/status (holds SSID/password) | `wifiBegin`, `wifiEnsureConnected`, `wifiConnected`, `wifiIP` |
+| `wifi_net.*` | STA connect/reconnect/status + mDNS (advertises `esp32.local` and an HTTP service); holds SSID/password/hostname | `wifiBegin`, `wifiEnsureConnected`, `wifiConnected`, `wifiIP`, `wifiHostname` |
 | `time_sync.*` | NTP sync + dual-TZ formatting (holds TZ strings) | `timeBegin`, `timeFormatDateTime` |
 | `weather.*` | Open-Meteo fetch (defines `City`, `cities[]`, `NUM_CITIES`) | `weatherUpdateAll` |
 | `weather/draw.*` | **Frontend** for weather: renders one city as a gauge + condition icon (uses the global `u8g2`). Lives in the weather folder, called from `drawScreen()` | `drawWeatherRow` |
@@ -96,4 +98,4 @@ Note the I2C pins are declared in **two places** that must agree: the sketch's `
 
 ## Hardcoded values to be aware of
 
-These are literals, each living with its owning module: WiFi SSID/password in `src/wifi_net/wifi_net.cpp`, the `cities[]` weather list in `src/weather/weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `src/time_sync/time_sync.cpp`, the SHTC3 temperature offset in `src/bsp/i2c_equipment.cpp`, and the default claude.ai org id in `src/claude_usage/claude_usage.cpp` (the `sessionKey` cookie is **not** in code — it is entered at runtime via the web UI and held in RAM). `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner labels + axis ticks).
+These are literals, each living with its owning module: WiFi SSID/password + mDNS hostname (`esp32`) in `src/wifi_net/wifi_net.cpp`, the `cities[]` weather list in `src/weather/weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `src/time_sync/time_sync.cpp`, the SHTC3 temperature offset in `src/bsp/i2c_equipment.cpp`, and the default claude.ai org id in `src/claude_usage/claude_usage.cpp` (the `sessionKey` cookie is **not** in code — it is entered at runtime via the web UI and held in RAM). `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner labels + axis ticks).

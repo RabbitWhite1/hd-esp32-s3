@@ -4,10 +4,12 @@
 #include "wifi_net.h"
 #include "../logging/logging.h"
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
 // ---------- Wi-Fi credentials ----------
 static const char *ssid = "2493-26APR03";
 static const char *password = "greenG2493";
+static const char *hostname = "esp32";  // advertised over mDNS as "esp32.local"
 
 void wifiBegin() {
   logInfo("Connecting to %s", ssid);
@@ -17,6 +19,15 @@ void wifiBegin() {
     delay(500);
   }
   logInfo("WiFi connected, IP: %s", WiFi.localIP().toString().c_str());
+
+  // Advertise <hostname>.local via mDNS. end() first so a reconnect restarts cleanly.
+  MDNS.end();
+  if (MDNS.begin(hostname)) {
+    MDNS.addService("http", "tcp", 80);  // discoverable web UI
+    logInfo("mDNS started: %s.local", hostname);
+  } else {
+    logWarn("mDNS start failed");
+  }
 }
 
 void wifiEnsureConnected() {
@@ -29,6 +40,10 @@ bool wifiConnected() {
 
 const char *wifiSSID() {
   return ssid;
+}
+
+const char *wifiHostname() {
+  return hostname;
 }
 
 String wifiIP() {

@@ -36,10 +36,10 @@ CodecPort *codec = nullptr;
 ST7305_U8g2 lcd(RLCD_SCK_PIN, RLCD_MOSI_PIN, RLCD_DC_PIN, RLCD_CS_PIN, RLCD_RST_PIN);
 U8G2 *u8g2 = nullptr;
 
-const unsigned long SAMPLE_INTERVAL = 1000;
-const unsigned long SAMPLE_PRINT_INTERVAL = 60000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
+const unsigned long SAMPLE_INTERVAL = 10 * 1000;
+const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
-const unsigned long CLAUDE_USAGE_INTERVAL = 10UL * 60 * 1000;  // refresh Claude usage every 10 min
+const unsigned long CLAUDE_USAGE_INTERVAL = 30UL * 60 * 1000;  // refresh Claude usage every 30 min
 unsigned long lastSample = 0;
 unsigned long lastWeather = 0;
 unsigned long lastClaudeUsage = 0;
@@ -165,7 +165,7 @@ void drawUsageBar(int x, int y, int w, const char *label, float pct) {
 void drawScreen() {
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
-  char buf[48];
+  char buf[80];
   const int mx = 12;                  // left margin, pulled toward the left edge
   const int lineW = DISP_W - 8 - mx;  // full-width lines run from mx to the to-do box's right edge
 
@@ -194,12 +194,12 @@ void drawScreen() {
   drawTodoBox(190, 38, DISP_W - 190 - 8, 130);
 
   // Separator under the temp/humidity column — left column only, clear of the to-do box.
-  u8g2->drawHLine(mx, 102, 150);
+  u8g2->drawHLine(mx, 102, 172);
 
   // Weather: one horizontal temperature-gauge row per city.
   int wy = 108;
   for (int i = 0; i < NUM_CITIES; i++) {
-    drawWeatherRow(mx, wy, 150, cities[i]);
+    drawWeatherRow(mx, wy, 172, cities[i]);
     wy += 28;
   }
 
@@ -231,7 +231,7 @@ void drawScreen() {
   u8g2->drawHLine(mx, 283, lineW);
   u8g2->setFont(u8g2_font_5x7_tf);
   if (wifiConnected()) {
-    snprintf(buf, sizeof(buf), "SSID: %s    IP: %s", wifiSSID(), wifiIP().c_str());
+    snprintf(buf, sizeof(buf), "SSID: %s    IP: %s    mDNS: %s.local", wifiSSID(), wifiIP().c_str(), wifiHostname());
     u8g2->drawStr(mx, 294, buf);
   } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
