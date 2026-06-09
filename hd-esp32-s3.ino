@@ -9,7 +9,7 @@
 #include "time_sync.h"  // timeBegin / timeFormatDateTime
 #include "weather.h"    // City, cities[], weatherUpdateAll
 #include "sensors.h"    // sensorsBegin / sensorsPresent / sensorsRead
-#include "web_ui.h"     // webBegin / webHandle / webMessage
+#include "web_ui.h"     // webBegin / webHandle / webTodo*
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -131,6 +131,37 @@ void drawDiagnostic() {
   }
 }
 
+// Render the web-edited to-do list inside a framed box. Each item gets a small
+// checkbox (X'd + struck through when done) and is clipped to the box width.
+void drawTodoBox(int x, int y, int w, int h) {
+  u8g2->drawFrame(x, y, w, h);
+  u8g2->setFont(u8g2_font_6x10_tf);
+  u8g2->drawStr(x + 6, y + 11, "To-do");
+  u8g2->drawHLine(x + 4, y + 15, w - 8);
+
+  int n = webTodoCount();
+  if (n == 0) {
+    u8g2->drawStr(x + 6, y + 28, "(empty)");
+    return;
+  }
+  int maxChars = (w - 20) / 6;  // chars that fit after the checkbox
+  if (maxChars > 40) maxChars = 40;
+  int ty = y + 28;  // first item's text baseline
+  for (int i = 0; i < n && ty <= y + h - 4; i++) {
+    int cbx = x + 6, cby = ty - 8;
+    u8g2->drawFrame(cbx, cby, 8, 8);
+    if (webTodoDone(i)) {
+      u8g2->drawLine(cbx, cby, cbx + 7, cby + 7);
+      u8g2->drawLine(cbx + 7, cby, cbx, cby + 7);
+    }
+    char line[44];
+    snprintf(line, sizeof(line), "%.*s", maxChars, webTodoText(i));
+    u8g2->drawStr(cbx + 12, ty, line);
+    if (webTodoDone(i)) u8g2->drawHLine(cbx + 12, ty - 3, (int)strlen(line) * 6);
+    ty += 13;
+  }
+}
+
 void drawScreen() {
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
@@ -141,17 +172,24 @@ void drawScreen() {
   else u8g2->drawStr(35, 40, "Syncing time...");
   u8g2->drawHLine(35, 46, DISP_W - 50);
 
-  drawThermometer(40, 60, 55);
-  u8g2->setFont(u8g2_font_logisoso32_tf);
+  // Temperature + humidity, half-size, tucked into the upper-left under the date.
+  // Both icons are drawn from their left edge, but the thermometer bulb (r=h/6) is
+  // narrower than the droplet (r=h/3); offset each so they share one center column.
+  const int icoH = 28, icoCx = 49;
+  drawThermometer(icoCx - icoH / 6, 54, icoH);
+  u8g2->setFont(u8g2_font_logisoso16_tf);
   if (sensorOK && !isnan(lastTemp)) snprintf(buf, sizeof(buf), "%.1f C", lastTemp);
   else snprintf(buf, sizeof(buf), "-- C");
-  u8g2->drawStr(95, 100, buf);
+  u8g2->drawStr(70, 74, buf);
 
-  drawDroplet(40, 130, 55);
-  u8g2->setFont(u8g2_font_logisoso32_tf);
+  drawDroplet(icoCx - icoH / 3, 86, icoH);
+  u8g2->setFont(u8g2_font_logisoso16_tf);
   if (sensorOK && !isnan(lastHum)) snprintf(buf, sizeof(buf), "%.1f %%", lastHum);
   else snprintf(buf, sizeof(buf), "-- %%");
-  u8g2->drawStr(95, 180, buf);
+  u8g2->drawStr(70, 106, buf);
+
+  // To-do box to the right of the temp/humidity column.
+  drawTodoBox(190, 52, DISP_W - 190 - 8, 124);
 
   u8g2->drawHLine(35, 200, DISP_W - 50);
   u8g2->setFont(u8g2_font_6x12_tf);
@@ -171,13 +209,6 @@ void drawScreen() {
     snprintf(buf, sizeof(buf), "ssid: %s    IP: %s", wifiSSID(), wifiIP().c_str());
     u8g2->drawStr(35, wy + 2, buf);
   } else u8g2->drawStr(35, wy + 2, "WiFi: disconnected");
-
-  // Message posted from the web page (if any), drawn on the bottom line.
-  const String &msg = webMessage();
-  if (msg.length() > 0) {
-    snprintf(buf, sizeof(buf), "Msg: %s", msg.c_str());
-    u8g2->drawStr(35, wy + 14, buf);
-  }
 
   if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
