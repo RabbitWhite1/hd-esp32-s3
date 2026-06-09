@@ -68,10 +68,9 @@ static void handleRoot() {
   html += "<hr><h2>Claude usage</h2><form action='/claude' method='POST'>"
           "<p>Org ID:<br><input type='text' name='org' value='";
   html += htmlEscape(claudeUsageOrgId());
-  html += "'></p><p>Session key (";
-  html += claudeUsageHasKey() ? "set &mdash; leave blank to keep" : "not set";
-  html += "):<br><input type='password' name='key' style='width:70%' placeholder='sk-ant-sid...'></p>"
-          "<button type='submit'>Save</button></form>";
+  html += "'></p><p>Session key:<br><input type='text' name='key' style='width:70%' value='";
+  html += htmlEscape(claudeUsageSessionKey());
+  html += "'></p><button type='submit'>Save</button></form>";
 
   html += "</body></html>";
   server.send(200, "text/html", html);
