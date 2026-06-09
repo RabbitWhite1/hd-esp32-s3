@@ -43,7 +43,8 @@ The sketch (`hd-esp32-s3.ino`) holds **frontend only**: all U8g2 drawing (`drawS
 | `time_sync.*` | NTP sync + dual-TZ formatting (holds TZ strings) | `timeBegin`, `timeFormatDateTime` |
 | `weather.*` | Open-Meteo fetch (defines `City`, `cities[]`, `NUM_CITIES`) | `weatherUpdateAll` |
 | `sensors.*` | SHTC3 temp/humidity (owns the `Shtc3Port` instance) | `sensorsBegin(I2cMasterBus&)`, `sensorsPresent`, `sensorsRead` |
-| `web_ui.*` | LAN HTTP server for an editable to-do checklist shown on the LCD (owns a `WebServer` on port 80 + the item list) | `webBegin`, `webHandle`, `webTodoCount` / `webTodoText` / `webTodoDone` |
+| `web_ui.*` | LAN HTTP server: editable to-do checklist shown on the LCD, plus a form that sets the `claude_usage` credentials (owns a `WebServer` on port 80) | `webBegin`, `webHandle`, `webTodoCount` / `webTodoText` / `webTodoDone` |
+| `claude_usage.*` | Fetches the claude.ai org usage summary over HTTPS. Org id + `sessionKey` are set at **runtime via the web UI** (no secret in code). Endpoint is **authenticated** and may be blocked by Cloudflare/anti-bot from an embedded client | `claudeUsageUpdate`, `claudeUsageOk`, `claudeFiveHour`, `claudeSevenDay`, `claudeUsageSetOrgId` / `claudeUsageSetSessionKey` |
 
 The sketch passes `I2cbus` into `sensorsBegin()` and constructs the codec itself, so the shared bus stays owned by the frontend while sensor access is encapsulated. When adding logic, keep this rule: data acquisition / networking / hardware reads go in a backend module; anything that draws or produces user-facing output stays in the `.ino`. The "user-facing output" that belongs in the `.ino` means the **LCD/audio** specifically — e.g. `web_ui.*` serves an HTML page (that's networking, so it's a backend module), but the sketch is what reads the to-do items (`webTodoCount`/`webTodoText`/`webTodoDone`) and renders them inside `drawScreen()`.
 
@@ -79,4 +80,4 @@ Note the I2C pins are declared in **two places** that must agree: the sketch's `
 
 ## Hardcoded values to be aware of
 
-These are literals, each living with its owning module: WiFi SSID/password in `wifi_net.cpp`, the `cities[]` weather list in `weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `time_sync.cpp`, and the SHTC3 temperature offset in `i2c_equipment.cpp`. `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner stars + axis ticks).
+These are literals, each living with its owning module: WiFi SSID/password in `wifi_net.cpp`, the `cities[]` weather list in `weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `time_sync.cpp`, the SHTC3 temperature offset in `i2c_equipment.cpp`, and the default claude.ai org id in `claude_usage.cpp` (the `sessionKey` cookie is **not** in code — it is entered at runtime via the web UI and held in RAM). `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner labels + axis ticks).

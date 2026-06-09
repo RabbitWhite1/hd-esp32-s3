@@ -10,6 +10,7 @@
 #include "weather.h"    // City, cities[], weatherUpdateAll
 #include "sensors.h"    // sensorsBegin / sensorsPresent / sensorsRead
 #include "web_ui.h"     // webBegin / webHandle / webTodo*
+#include "claude_usage.h"  // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -33,10 +34,12 @@ ST7305_U8g2 lcd(RLCD_SCK_PIN, RLCD_MOSI_PIN, RLCD_DC_PIN, RLCD_CS_PIN, RLCD_RST_
 U8G2 *u8g2 = nullptr;
 
 const unsigned long SAMPLE_INTERVAL = 1000;
-const unsigned long SAMPLE_PRINT_INTERVAL = 10000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
+const unsigned long SAMPLE_PRINT_INTERVAL = 60000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
+const unsigned long CLAUDE_USAGE_INTERVAL = 10UL * 60 * 1000;  // refresh Claude usage every 10 min
 unsigned long lastSample = 0;
 unsigned long lastWeather = 0;
+unsigned long lastClaudeUsage = 0;
 unsigned long sampleCount = 0;
 
 // latest sensor readings cached for redraw
@@ -267,55 +270,87 @@ void drawWeatherRow(int x, int y, int w, const City &c) {
   drawWeatherIcon(iconX, barY + barH / 2 - iconSz / 2, c.code, c.wind);
 }
 
+// A labeled 0-100% utilization bar: "<label> [===    ] NN%", drawn from (x, y).
+void drawUsageBar(int x, int y, int w, const char *label, float pct) {
+  u8g2->setFont(u8g2_font_6x10_tf);
+  u8g2->drawStr(x, y + 8, label);
+  int barH = 8;
+  int barX = x + 28;
+  int pctW = 36;  // room for the trailing "NN%"
+  int barW = (x + w) - pctW - barX;
+  if (barW < 8) barW = 8;
+  u8g2->drawRFrame(barX, y, barW, barH, barH / 2);
+  if (!isnan(pct)) {
+    float f = pct / 100.0f;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    int fillW = (int)(f * (barW - 2));
+    if (fillW > 0) u8g2->drawBox(barX + 1, y + 1, fillW, barH - 2);
+    char s[8];
+    snprintf(s, sizeof(s), "%.0f%%", pct);
+    u8g2->drawStr(barX + barW + 6, y + 8, s);
+  } else {
+    u8g2->drawStr(barX + barW + 6, y + 8, "--");
+  }
+}
+
 void drawScreen() {
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
   char buf[48];
+  const int mx = 12;                  // left margin, pulled toward the left edge
+  const int lineW = DISP_W - 8 - mx;  // full-width lines run from mx to the to-do box's right edge
 
   u8g2->setFont(u8g2_font_6x13_tf);
-  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(35, 40, buf);
-  else u8g2->drawStr(35, 40, "Syncing time...");
-  u8g2->drawHLine(35, 46, DISP_W - 43);
+  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 34, buf);
+  else u8g2->drawStr(mx, 34, "Syncing time...");
+  u8g2->drawHLine(mx, 40, lineW);
 
   // Temperature + humidity, small, tucked into the upper-left under the date.
   // Both icons are drawn from their left edge, but the thermometer bulb (r=h/6) is
   // narrower than the droplet (r=h/3); offset each so they share one center column.
-  const int icoH = 22, icoCx = 49;  // ~80% of the previous 28px icon
-  drawThermometer(icoCx - icoH / 6, 52, icoH);
+  const int icoH = 22, icoCx = mx + 14;  // ~80% icon; shares a center column with the droplet
+  drawThermometer(icoCx - icoH / 6, 50, icoH);
   u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastTemp)) snprintf(buf, sizeof(buf), "%.1f C", lastTemp);
   else snprintf(buf, sizeof(buf), "-- C");
-  u8g2->drawStr(68, 70, buf);
+  u8g2->drawStr(mx + 33, 72, buf);
 
-  drawDroplet(icoCx - icoH / 3, 76, icoH);
+  drawDroplet(icoCx - icoH / 3, 82, icoH);
   u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastHum)) snprintf(buf, sizeof(buf), "%.1f %%", lastHum);
   else snprintf(buf, sizeof(buf), "-- %%");
-  u8g2->drawStr(68, 94, buf);
+  u8g2->drawStr(mx + 33, 104, buf);
 
   // To-do box to the right of the temp/humidity column.
-  drawTodoBox(190, 52, DISP_W - 190 - 8, 124);
+  drawTodoBox(190, 48, DISP_W - 190 - 8, 130);
 
   // Separator under the temp/humidity column — left column only, clear of the to-do box.
-  u8g2->drawHLine(35, 104, 150);
+  u8g2->drawHLine(mx, 112, 150);
 
   // Weather: one horizontal temperature-gauge row per city.
-  int wy = 110;
+  int wy = 118;
   for (int i = 0; i < NUM_CITIES; i++) {
-    drawWeatherRow(35, wy, 150, cities[i]);
-    wy += 24;
+    drawWeatherRow(mx, wy, 150, cities[i]);
+    wy += 28;
   }
 
   // Divider below the main content (weather column + to-do box).
-  u8g2->drawHLine(35, 182, DISP_W - 43);
+  u8g2->drawHLine(mx, 182, lineW);
+
+  // Claude usage, just below the second full divider.
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(mx, 197, "Claude usage");
+  drawUsageBar(mx, 205, lineW, "5h", claudeFiveHour());
+  drawUsageBar(mx, 221, lineW, "7d", claudeSevenDay());
 
   // Wi-Fi footer pinned to the bottom, with a divider right above it.
-  u8g2->drawHLine(35, 283, DISP_W - 43);
+  u8g2->drawHLine(mx, 283, lineW);
   u8g2->setFont(u8g2_font_5x7_tf);
   if (wifiConnected()) {
     snprintf(buf, sizeof(buf), "SSID: %s    IP: %s", wifiSSID(), wifiIP().c_str());
-    u8g2->drawStr(35, 294, buf);
-  } else u8g2->drawStr(35, 294, "WiFi: disconnected");
+    u8g2->drawStr(mx, 294, buf);
+  } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
   if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
@@ -341,6 +376,8 @@ void setup() {
   webBegin();  // start the LAN message server once Wi-Fi is up
   weatherUpdateAll();
   lastWeather = millis();
+  claudeUsageUpdate();
+  lastClaudeUsage = millis();
   drawScreen();
   playChime();  // boot confirmation beep
 }
@@ -364,6 +401,11 @@ void loop() {
   if (now - lastWeather >= WEATHER_INTERVAL) {
     lastWeather = now;
     weatherUpdateAll();
+  }
+
+  if (now - lastClaudeUsage >= CLAUDE_USAGE_INTERVAL) {
+    lastClaudeUsage = now;
+    claudeUsageUpdate();
   }
 
   if (now - lastSample >= SAMPLE_INTERVAL) {
