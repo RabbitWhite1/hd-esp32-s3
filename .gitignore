@@ -1,0 +1,6 @@
+# Locally-installed Arduino libraries (installed separately, not vendored).
+# Only src/ExternLib is deliberately vendored; everything else lives here.
+libraries/
+
+# Build output
+/build/
