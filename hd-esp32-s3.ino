@@ -162,6 +162,52 @@ void drawTodoBox(int x, int y, int w, int h) {
   }
 }
 
+// One city's weather as a horizontal temperature gauge shaped like the
+// thermometer's stem (a rounded bar): "<city>  <low> [==fill==] <high>", with the
+// <current> value floating just above the point the fill reaches.
+void drawWeatherRow(int x, int y, int w, const City &c) {
+  u8g2->setFont(u8g2_font_5x7_tf);
+  int base = y + 21;  // baseline for the city/low/high text and the bar's bottom
+  u8g2->drawStr(x, base, c.name);
+
+  if (!c.ok) {
+    u8g2->drawStr(x + 58, base, "--");
+    return;
+  }
+
+  char s[8];
+  int lowX = x + 58;
+  snprintf(s, sizeof(s), "%.0f", c.lo);
+  u8g2->drawStr(lowX, base, s);
+
+  int highX = x + w - 14;
+  snprintf(s, sizeof(s), "%.0f", c.hi);
+  u8g2->drawStr(highX, base, s);
+
+  int barH = 7;
+  int barX = lowX + 16;
+  int barY = base - barH;
+  int barW = highX - 4 - barX;
+  if (barW < 8) barW = 8;
+  u8g2->drawRFrame(barX, barY, barW, barH, barH / 2);
+
+  // Fill from the left edge to where <current> falls between <low> and <high>.
+  float span = c.hi - c.lo;
+  float frac = (span > 0.01f) ? (c.cur - c.lo) / span : 0.0f;
+  if (frac < 0) frac = 0;
+  if (frac > 1) frac = 1;
+  int fillW = (int)(frac * (barW - 2));
+  if (fillW > 0) u8g2->drawBox(barX + 1, barY + 1, fillW, barH - 2);
+
+  // <current> centered just above the fill tip, clamped to stay within the row.
+  snprintf(s, sizeof(s), "%.0f", c.cur);
+  int tw = (int)strlen(s) * 5;
+  int curX = barX + 1 + fillW - tw / 2;
+  if (curX < x) curX = x;
+  if (curX + tw > x + w) curX = x + w - tw;
+  u8g2->drawStr(curX, barY - 2, s);
+}
+
 void drawScreen() {
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
@@ -172,43 +218,41 @@ void drawScreen() {
   else u8g2->drawStr(35, 40, "Syncing time...");
   u8g2->drawHLine(35, 46, DISP_W - 50);
 
-  // Temperature + humidity, half-size, tucked into the upper-left under the date.
+  // Temperature + humidity, small, tucked into the upper-left under the date.
   // Both icons are drawn from their left edge, but the thermometer bulb (r=h/6) is
   // narrower than the droplet (r=h/3); offset each so they share one center column.
-  const int icoH = 28, icoCx = 49;
-  drawThermometer(icoCx - icoH / 6, 54, icoH);
-  u8g2->setFont(u8g2_font_logisoso16_tf);
+  const int icoH = 22, icoCx = 49;  // ~80% of the previous 28px icon
+  drawThermometer(icoCx - icoH / 6, 52, icoH);
+  u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastTemp)) snprintf(buf, sizeof(buf), "%.1f C", lastTemp);
   else snprintf(buf, sizeof(buf), "-- C");
-  u8g2->drawStr(70, 74, buf);
+  u8g2->drawStr(68, 70, buf);
 
-  drawDroplet(icoCx - icoH / 3, 86, icoH);
-  u8g2->setFont(u8g2_font_logisoso16_tf);
+  drawDroplet(icoCx - icoH / 3, 76, icoH);
+  u8g2->setFont(u8g2_font_helvB12_tf);
   if (sensorOK && !isnan(lastHum)) snprintf(buf, sizeof(buf), "%.1f %%", lastHum);
   else snprintf(buf, sizeof(buf), "-- %%");
-  u8g2->drawStr(70, 106, buf);
+  u8g2->drawStr(68, 94, buf);
 
   // To-do box to the right of the temp/humidity column.
   drawTodoBox(190, 52, DISP_W - 190 - 8, 124);
 
-  u8g2->drawHLine(35, 200, DISP_W - 50);
-  u8g2->setFont(u8g2_font_6x12_tf);
-  u8g2->drawStr(35, 215, "Weather (C)");
-  u8g2->setFont(u8g2_font_6x10_tf);
-  int wy = 232;
+  // Separator under the temp/humidity column — left column only, clear of the to-do box.
+  u8g2->drawHLine(35, 104, 150);
+
+  // Weather: one horizontal temperature-gauge row per city.
+  int wy = 110;
   for (int i = 0; i < NUM_CITIES; i++) {
-    if (cities[i].ok)
-      snprintf(buf, sizeof(buf), "%-10s %.0f  H%.0f L%.0f", cities[i].name, cities[i].cur, cities[i].hi, cities[i].lo);
-    else
-      snprintf(buf, sizeof(buf), "%-10s  --", cities[i].name);
-    u8g2->drawStr(35, wy, buf);
-    wy += 16;
+    drawWeatherRow(35, wy, 150, cities[i]);
+    wy += 24;
   }
+
+  // Wi-Fi footer, below the to-do box so the long line can span the full width.
   u8g2->setFont(u8g2_font_5x7_tf);
   if (wifiConnected()) {
     snprintf(buf, sizeof(buf), "ssid: %s    IP: %s", wifiSSID(), wifiIP().c_str());
-    u8g2->drawStr(35, wy + 2, buf);
-  } else u8g2->drawStr(35, wy + 2, "WiFi: disconnected");
+    u8g2->drawStr(35, 192, buf);
+  } else u8g2->drawStr(35, 192, "WiFi: disconnected");
 
   if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
