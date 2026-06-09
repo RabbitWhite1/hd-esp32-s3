@@ -205,7 +205,17 @@ void drawScreen() {
 
   // Claude usage, just below the second full divider.
   u8g2->setFont(u8g2_font_6x12_tf);
-  u8g2->drawStr(mx, 187, "Claude usage");
+  time_t cuAsOf = claudeUsageAsOf();
+  if (cuAsOf > 0) {
+    struct tm cuTm;
+    localtime_r(&cuAsOf, &cuTm);
+    char asOfStr[24];
+    strftime(asOfStr, sizeof(asOfStr), "%Y-%m-%d %H:%M:%S", &cuTm);
+    snprintf(buf, sizeof(buf), "Claude Usage (As of %s)", asOfStr);
+  } else {
+    snprintf(buf, sizeof(buf), "Claude Usage (never)");
+  }
+  u8g2->drawStr(mx, 187, buf);
   // Mascot on the left; the two gauges are shifted right to make room for it.
   const int clawdGap = 6;
   const int gaugeX = mx + CLAWD_ICON_W + clawdGap;
@@ -256,13 +266,18 @@ void loop() {
   wifiEnsureConnected();
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
 
-  // KEY button: debounce, chime on press (HIGH->LOW)
+  // KEY button: debounce; on press (HIGH->LOW) chime + force-refresh weather/Claude usage
   int k = digitalRead(KEY_PIN);
   if (k != keyPrev && millis() - keyLastChange > 40) {
     keyLastChange = millis();
     if (k == LOW) {
-      logInfo("KEY pressed -> chime");
+      logInfo("KEY pressed -> chime + refresh");
       playChime();
+      weatherUpdateAll();
+      claudeUsageUpdate();
+      lastWeather = millis();      // reset the periodic timers so the next auto-refresh is a full interval away
+      lastClaudeUsage = millis();
+      drawScreen();                // show the freshly fetched data
     }
     keyPrev = k;
   }

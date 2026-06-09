@@ -17,6 +17,7 @@ static String sessionKey = "";
 static bool ok = false;
 static float fiveHour = NAN;
 static float sevenDay = NAN;
+static time_t asOf = 0;  // wall-clock time of the last successful fetch
 
 void claudeUsageUpdate() {
   if (!wifiConnected()) return;
@@ -52,7 +53,10 @@ void claudeUsageUpdate() {
   fiveHour = doc["five_hour"]["utilization"] | NAN;
   sevenDay = doc["seven_day"]["utilization"] | NAN;
   ok = !isnan(fiveHour) || !isnan(sevenDay);
-  if (ok) logInfo("Claude usage: 5h %.0f%%  7d %.0f%%", fiveHour, sevenDay);
+  if (ok) {
+    asOf = time(nullptr);
+    logInfo("Claude usage: 5h %.0f%%  7d %.0f%%", fiveHour, sevenDay);
+  }
 }
 
 bool claudeUsageOk() {
@@ -71,8 +75,14 @@ void claudeUsageSetOrgId(const String &id) {
 void claudeUsageSetSessionKey(const String &key) {
   if (key.length() > 0) sessionKey = key;  // "" means "keep current key"
 }
+time_t claudeUsageAsOf() {
+  return asOf;
+}
 const String &claudeUsageOrgId() {
   return orgId;
+}
+const String &claudeUsageSessionKey() {
+  return sessionKey;
 }
 bool claudeUsageHasKey() {
   return sessionKey.length() > 0;
