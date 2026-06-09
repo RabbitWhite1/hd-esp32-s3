@@ -95,13 +95,8 @@ void drawDroplet(int x, int y, int h) {
   u8g2->drawTriangle(cx, y, cx - r, cy, cx + r, cy);
 }
 void drawDiagnostic() {
-  u8g2->setFont(u8g2_font_5x7_tf);
-  u8g2->drawStr(2, 8, "TL");
-  u8g2->drawStr(DISP_W - 12, 8, "TR");
-  u8g2->drawStr(2, DISP_H - 2, "BL");
-  u8g2->drawStr(DISP_W - 12, DISP_H - 2, "BR");
-  for (int y = 50; y < DISP_H; y += 50) u8g2->drawHLine(0, y, 8);  // edge ticks, no labels
-  for (int x = 50; x < DISP_W; x += 50) u8g2->drawVLine(x, 0, 8);
+  for (int y = 50; y < DISP_H; y += 50) u8g2->drawHLine(0, y, 4);  // half-length edge ticks
+  for (int x = 50; x < DISP_W; x += 50) u8g2->drawVLine(x, 0, 4);
 }
 
 // Render the web-edited to-do list inside a framed box. Each item gets a small
