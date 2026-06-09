@@ -7,7 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include "codec_bsp.h"
 #include "i2c_bsp.h"
-#include "src/Music/canon.h"
+#include "../Music/canon.h"
 
 
 const uint8_t * music_pcm_start = canon_pcm;

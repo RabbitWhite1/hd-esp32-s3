@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #include "sensors.h"
-#include "i2c_equipment.h"  // Shtc3Port
-#include "logging.h"
+#include "../bsp/i2c_equipment.h"  // Shtc3Port
+#include "../logging/logging.h"
 
 static Shtc3Port *shtc3 = nullptr;
 static bool present = false;

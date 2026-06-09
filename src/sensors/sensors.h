@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #pragma once
-#include "i2c_bsp.h"
+#include "../bsp/i2c_bsp.h"
 
 // Sensor backend: SHTC3 temperature/humidity over the shared I2C bus.
 void sensorsBegin(I2cMasterBus &bus);       // probe + init; updates sensorsPresent()
