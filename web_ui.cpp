@@ -1,4 +1,5 @@
 #include "web_ui.h"
+#include "claude_usage.h"  // configure org id + session key from the web form
 #include "logging.h"
 #include <WebServer.h>
 
@@ -36,7 +37,7 @@ static void handleRoot() {
   String html =
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>h4d to-do</title>"
+    "<title>h4d panel</title>"
     "<style>body{font-family:sans-serif;font-size:1.1em;margin:1em}"
     "ul{padding:0}li{list-style:none;margin:.5em 0}"
     "input[type=text]{font-size:1em;width:70%}"
@@ -58,9 +59,28 @@ static void handleRoot() {
   // "+" adds a blank row (a server round-trip that also preserves current edits).
   if (todoCount < MAX_TODOS)
     html += "<button type='submit' name='action' value='add'>+</button>";
-  html += "<button type='submit' name='action' value='save'>Save</button>"
-          "</form></body></html>";
+  html += "<button type='submit' name='action' value='save'>Save</button></form>";
+
+  // Claude usage credentials (kept in RAM on the device, never in the firmware).
+  html += "<hr><h2>Claude usage</h2><form action='/claude' method='POST'>"
+          "<p>Org ID:<br><input type='text' name='org' value='";
+  html += htmlEscape(claudeUsageOrgId());
+  html += "'></p><p>Session key (";
+  html += claudeUsageHasKey() ? "set &mdash; leave blank to keep" : "not set";
+  html += "):<br><input type='password' name='key' style='width:70%' placeholder='sk-ant-sid...'></p>"
+          "<button type='submit'>Save</button></form>";
+
+  html += "</body></html>";
   server.send(200, "text/html", html);
+}
+
+static void handleClaude() {
+  if (server.hasArg("org")) claudeUsageSetOrgId(server.arg("org"));
+  if (server.hasArg("key")) claudeUsageSetSessionKey(server.arg("key"));  // empty -> keep current
+  logInfo("Claude credentials updated via web UI");
+  claudeUsageUpdate();  // refresh now so the result shows on the LCD immediately
+  server.sendHeader("Location", "/");
+  server.send(303);
 }
 
 // Rebuild the list from the submitted form fields (item0..itemN / done0..doneN).
@@ -103,6 +123,7 @@ static void handleSave() {
 void webBegin() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
+  server.on("/claude", HTTP_POST, handleClaude);
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
   server.begin();
   logInfo("Web UI listening on port 80");
