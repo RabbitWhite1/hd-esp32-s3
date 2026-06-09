@@ -93,9 +93,10 @@ static void drawWeatherIcon(int x, int y, int code, float wind) {
 // thermometer's stem (a rounded bar): "<city> <low> [==fill==] <high>", with the
 // <current> value floating just above the fill tip and a condition icon at the right.
 void drawWeatherRow(int x, int y, int w, const City &c) {
-  u8g2->setFont(u8g2_font_5x7_tf);
   int base = y + 21;  // baseline for the city/low/high text and the bar's bottom
+  u8g2->setFont(u8g2_font_6x10_tf);  // city name a bit larger than the values
   u8g2->drawStr(x, base, c.name);
+  u8g2->setFont(u8g2_font_5x7_tf);   // low/high/current values + bar stay small
 
   if (!c.ok) {
     u8g2->drawStr(x + 58, base, "--");
