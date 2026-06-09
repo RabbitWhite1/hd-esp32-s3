@@ -9,6 +9,7 @@
 #include "time_sync.h"  // timeBegin / timeFormatDateTime
 #include "weather.h"    // City, cities[], weatherUpdateAll
 #include "sensors.h"    // sensorsBegin / sensorsPresent / sensorsRead
+#include "web_ui.h"     // webBegin / webHandle / webMessage
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -171,6 +172,13 @@ void drawScreen() {
     u8g2->drawStr(35, wy + 2, buf);
   } else u8g2->drawStr(35, wy + 2, "WiFi: disconnected");
 
+  // Message posted from the web page (if any), drawn on the bottom line.
+  const String &msg = webMessage();
+  if (msg.length() > 0) {
+    snprintf(buf, sizeof(buf), "Msg: %s", msg.c_str());
+    u8g2->drawStr(35, wy + 14, buf);
+  }
+
   if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
 }
@@ -192,6 +200,7 @@ void setup() {
   drawScreen();
   wifiBegin();
   timeBegin();
+  webBegin();  // start the LAN message server once Wi-Fi is up
   weatherUpdateAll();
   lastWeather = millis();
   drawScreen();
@@ -200,6 +209,7 @@ void setup() {
 
 void loop() {
   wifiEnsureConnected();
+  webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
 
   // KEY button: debounce, chime on press (HIGH->LOW)
   int k = digitalRead(KEY_PIN);
