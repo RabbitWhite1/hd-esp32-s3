@@ -1,5 +1,5 @@
 #include "wifi_net.h"
-#include "logging.h"
+#include "../logging/logging.h"
 #include <WiFi.h>
 
 // ---------- Wi-Fi credentials ----------

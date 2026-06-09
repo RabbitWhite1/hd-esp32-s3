@@ -1,6 +1,6 @@
 #include "web_ui.h"
-#include "claude_usage.h"  // configure org id + session key from the web form
-#include "logging.h"
+#include "../claude_usage/claude_usage.h"  // configure org id + session key from the web form
+#include "../logging/logging.h"
 #include <WebServer.h>
 
 static const int MAX_TODOS = 8;

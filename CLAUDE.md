@@ -33,26 +33,42 @@ Required Arduino libraries (installed separately, not vendored): **U8g2**, **Ard
 
 ## Architecture
 
+### Project layout
+
+Only `h4d-esp32-s3.ino` lives at the sketch root; every other source file is grouped by feature into its own folder under **`src/`** (Arduino compiles the root plus `src/` **recursively**, and silently ignores any other root subfolder — so module folders *must* live under `src/`):
+
+```
+h4d-esp32-s3.ino
+src/
+  weather/      weather.{h,cpp}   draw.{h,cpp}      # backend fetch + its LCD rendering
+  wifi_net/ time_sync/ sensors/ web_ui/ claude_usage/ logging/   # one folder each
+  bsp/          i2c_bsp, i2c_equipment, codec_bsp, ST7305_U8g2
+  ExternLib/ Music/   # vendored (see below)
+```
+
+Includes use **paths relative to the including file**: the `.ino` includes `"src/<module>/<file>.h"`; a file in `src/foo/` reaches a sibling module with `"../bar/bar.h"` and its own folder with `"file.h"`. (This avoids depending on `-I` flags.) The module table below uses short names — e.g. `weather.*` means `src/weather/weather.{h,cpp}`.
+
 ### Frontend / backend split
 
-The sketch (`h4d-esp32-s3.ino`) holds **frontend only**: all U8g2 drawing (`drawScreen` and the `draw*` primitives), the audio chime + KEY-button handling (user-facing I/O), and `setup()`/`loop()`. It also owns the shared hardware objects (`I2cbus`, `lcd`, `codec`). Backend logic lives in dedicated modules and is reached only through their small headers:
+The sketch (`h4d-esp32-s3.ino`) holds **most frontend**: the `drawScreen` compositor, the `draw*` primitives that remain in the sketch, the audio chime + KEY-button handling (user-facing I/O), and `setup()`/`loop()`. It also owns the shared hardware objects (`I2cbus`, `lcd`, `codec`, and the global `U8G2 *u8g2`). Backend logic lives in dedicated modules and is reached only through their small headers:
 
 | Module | Responsibility | Key API |
 |--------|----------------|---------|
 | `wifi_net.*` | STA connect/reconnect/status (holds SSID/password) | `wifiBegin`, `wifiEnsureConnected`, `wifiConnected`, `wifiIP` |
 | `time_sync.*` | NTP sync + dual-TZ formatting (holds TZ strings) | `timeBegin`, `timeFormatDateTime` |
 | `weather.*` | Open-Meteo fetch (defines `City`, `cities[]`, `NUM_CITIES`) | `weatherUpdateAll` |
+| `weather/draw.*` | **Frontend** for weather: renders one city as a gauge + condition icon (uses the global `u8g2`). Lives in the weather folder, called from `drawScreen()` | `drawWeatherRow` |
 | `sensors.*` | SHTC3 temp/humidity (owns the `Shtc3Port` instance) | `sensorsBegin(I2cMasterBus&)`, `sensorsPresent`, `sensorsRead` |
 | `web_ui.*` | LAN HTTP server: editable to-do checklist shown on the LCD, plus a form that sets the `claude_usage` credentials (owns a `WebServer` on port 80) | `webBegin`, `webHandle`, `webTodoCount` / `webTodoText` / `webTodoDone` |
 | `claude_usage.*` | Fetches the claude.ai org usage summary over HTTPS. Org id + `sessionKey` are set at **runtime via the web UI** (no secret in code). Endpoint is **authenticated** and may be blocked by Cloudflare/anti-bot from an embedded client | `claudeUsageUpdate`, `claudeUsageOk`, `claudeFiveHour`, `claudeSevenDay`, `claudeUsageSetOrgId` / `claudeUsageSetSessionKey` |
 
-The sketch passes `I2cbus` into `sensorsBegin()` and constructs the codec itself, so the shared bus stays owned by the frontend while sensor access is encapsulated. When adding logic, keep this rule: data acquisition / networking / hardware reads go in a backend module; anything that draws or produces user-facing output stays in the `.ino`. The "user-facing output" that belongs in the `.ino` means the **LCD/audio** specifically — e.g. `web_ui.*` serves an HTML page (that's networking, so it's a backend module), but the sketch is what reads the to-do items (`webTodoCount`/`webTodoText`/`webTodoDone`) and renders them inside `drawScreen()`.
+The sketch passes `I2cbus` into `sensorsBegin()` and constructs the codec itself, so the shared bus stays owned by the frontend while sensor access is encapsulated. When adding logic, keep this rule: data acquisition / networking / hardware reads go in a backend module; `drawScreen()` (the compositor) stays in the `.ino`. Per-feature **rendering** may live in that feature's folder as a `draw.*` file (as `weather/draw.*` does) and be called from `drawScreen()` — it draws via the shared global `U8G2 *u8g2` (declared `extern` in the draw file, defined in the sketch). Networking that produces non-LCD output still belongs in a backend module — e.g. `web_ui.*` serves an HTML page, but the sketch is what reads the to-do items and renders them.
 
-`logging.*` is a cross-cutting utility used by every module and the sketch: `logDebug/logInfo/logWarn/logError` print to `Serial` with a `yymmdd-hhmmss` local-time prefix and a `[LEVEL]` tag, gated by the compile-time `LOG_LEVEL` constant (Python-`logging` style; defaults to `LOG_DEBUG` = everything). **Prefer these over raw `Serial.print*`** — the only direct `Serial` writes should be `Serial.begin()` and the single sink inside `logging.cpp`. Timestamps read ~1970 until `timeBegin()` finishes NTP sync.
+`logging.*` is a cross-cutting utility used by every module and the sketch: `logDebug/logInfo/logWarn/logError` print to `Serial` with a `yymmdd-hhmmss` local-time prefix and a `[LEVEL]` tag, gated by the compile-time `LOG_LEVEL` constant (Python-`logging` style; defaults to `LOG_DEBUG` = everything). **Prefer these over raw `Serial.print*`** — the only direct `Serial` writes should be `Serial.begin()` and the single sink inside `src/logging/logging.cpp`. Timestamps read ~1970 until `timeBegin()` finishes NTP sync.
 
 ### Device drivers (BSP layer)
 
-The backend/frontend code sits on top of three hand-written **BSP/port classes**, all sharing a single I2C bus by **reference injection**.
+The backend/frontend code sits on top of hand-written **BSP/port classes** that live together in **`src/bsp/`**; the three I2C devices share a single bus by **reference injection**.
 
 - **`I2cMasterBus` (`i2c_bsp.*`)** — thin wrapper over ESP-IDF `driver/i2c_master.h`. One instance is created in the sketch (`I2cbus(scl=14, sda=13, port 0)`) and passed by `&` into every device class. Convention: a `reg == -1` argument means "no register byte" → raw `i2c_master_transmit`/`receive`; otherwise the register is prepended.
 - **`Shtc3Port` (`i2c_equipment.*`)** — SHTC3 temp/humidity driver with CRC checking. Note `SHTC3_PETP_VOL = 4` is **subtracted from the temperature** to compensate for self-heating. The same file also has free functions `Rtc_Setup/SetTime/GetTime` for a **PCF85063 RTC** (via SensorLib, bridged to `I2cMasterBus` through a C callback and file-static singletons). The RTC code is present but not currently called from the sketch.
@@ -80,4 +96,4 @@ Note the I2C pins are declared in **two places** that must agree: the sketch's `
 
 ## Hardcoded values to be aware of
 
-These are literals, each living with its owning module: WiFi SSID/password in `wifi_net.cpp`, the `cities[]` weather list in `weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `time_sync.cpp`, the SHTC3 temperature offset in `i2c_equipment.cpp`, and the default claude.ai org id in `claude_usage.cpp` (the `sessionKey` cookie is **not** in code — it is entered at runtime via the web UI and held in RAM). `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner labels + axis ticks).
+These are literals, each living with its owning module: WiFi SSID/password in `src/wifi_net/wifi_net.cpp`, the `cities[]` weather list in `src/weather/weather.cpp`, the two timezone strings (`TZ_PACIFIC`/`TZ_EASTERN`) in `src/time_sync/time_sync.cpp`, the SHTC3 temperature offset in `src/bsp/i2c_equipment.cpp`, and the default claude.ai org id in `src/claude_usage/claude_usage.cpp` (the `sessionKey` cookie is **not** in code — it is entered at runtime via the web UI and held in RAM). `SHOW_DIAGNOSTIC` (in the `.ino`) toggles an on-screen calibration overlay (corner labels + axis ticks).

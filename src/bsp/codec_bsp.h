@@ -1,7 +1,7 @@
 #pragma once
 
-#include "src/ExternLib/codec_board/codec_board.h"
-#include "src/ExternLib/codec_board/codec_init.h"
+#include "../ExternLib/codec_board/codec_board.h"
+#include "../ExternLib/codec_board/codec_init.h"
 #include "i2c_bsp.h"
 
 class CodecPort {

@@ -1,6 +1,6 @@
 #include "weather.h"
-#include "wifi_net.h"
-#include "logging.h"
+#include "../wifi_net/wifi_net.h"
+#include "../logging/logging.h"
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>

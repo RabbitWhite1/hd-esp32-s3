@@ -1,5 +1,5 @@
 #include "time_sync.h"
-#include "logging.h"
+#include "../logging/logging.h"
 #include <time.h>
 
 #define TZ_PACIFIC "PST8PDT,M3.2.0,M11.1.0"
