@@ -11,8 +11,8 @@
 #include <math.h>
 
 City cities[] = {
-  { "Sunnyvale", 37.37f, -122.04f, NAN, NAN, NAN, false },
-  { "New York", 40.71f, -74.01f, NAN, NAN, NAN, false },
+  { "Sunnyvale", 37.37f, -122.04f, NAN, NAN, NAN, false, -1, 0.0f },
+  { "New York", 40.71f, -74.01f, NAN, NAN, NAN, false, -1, 0.0f },
 };
 const int NUM_CITIES = sizeof(cities) / sizeof(cities[0]);
 
@@ -23,7 +23,8 @@ static bool fetchWeather(City &c) {
   char url[200];
   snprintf(url, sizeof(url),
            "https://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f"
-           "&current=temperature_2m&daily=temperature_2m_max,temperature_2m_min"
+           "&current=temperature_2m,weather_code,wind_speed_10m"
+           "&daily=temperature_2m_max,temperature_2m_min"
            "&timezone=auto&forecast_days=1",
            c.lat, c.lon);
   HTTPClient http;
@@ -39,6 +40,8 @@ static bool fetchWeather(City &c) {
   JsonDocument doc;
   if (deserializeJson(doc, payload)) return false;
   c.cur = doc["current"]["temperature_2m"] | NAN;
+  c.code = doc["current"]["weather_code"] | -1;
+  c.wind = doc["current"]["wind_speed_10m"] | 0.0f;
   c.hi = doc["daily"]["temperature_2m_max"][0] | NAN;
   c.lo = doc["daily"]["temperature_2m_min"][0] | NAN;
   c.ok = !isnan(c.cur);
