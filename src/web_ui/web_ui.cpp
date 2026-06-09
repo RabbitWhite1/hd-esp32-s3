@@ -1,5 +1,6 @@
 #include "web_ui.h"
 #include "../claude_usage/claude_usage.h"  // configure org id + session key from the web form
+#include "../sensors/sensors.h"            // live temp/humidity shown on the page
 #include "../logging/logging.h"
 #include <WebServer.h>
 
@@ -42,8 +43,18 @@ static void handleRoot() {
     "ul{padding:0}li{list-style:none;margin:.5em 0}"
     "input[type=text]{font-size:1em;width:70%}"
     "button{font-size:1em;margin:.4em .4em 0 0}</style>"
-    "</head><body><h2>To-do</h2>"
-    "<form action='/save' method='POST'><ul>";
+    "</head><body>";
+
+  // Live temperature/humidity, read fresh on each page load.
+  float tC = NAN, rh = NAN;
+  bool haveSensor = sensorsPresent() && sensorsRead(&tC, &rh);
+  html += "<p>Temperature: ";
+  html += haveSensor ? (String(tC, 1) + " &deg;C") : String("--");
+  html += " &nbsp; Humidity: ";
+  html += haveSensor ? (String(rh, 1) + " %") : String("--");
+  html += "</p>";
+
+  html += "<h2>To-do</h2><form action='/save' method='POST'><ul>";
   for (int i = 0; i < todoCount; i++) {
     html += "<li><input type='checkbox' name='done";
     html += i;
