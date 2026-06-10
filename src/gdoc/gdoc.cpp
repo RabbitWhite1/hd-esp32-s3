@@ -3,17 +3,17 @@
 
 #include "gdoc.h"
 #include "../wifi_net/wifi_net.h"
+#include "../sdcard/sdcard.h"
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 // Link-shared Google Doc, fetched as plain text. The "export?format=txt" endpoint
 // 307-redirects to a signed googleusercontent.com host, so redirect-following must
-// be enabled. The doc must stay shared as "anyone with the link can view" for this
-// to work without authentication. Replace the id to point at a different doc.
-static const char *DOC_URL =
-  "https://docs.google.com/document/d/"
-  "1I6a2n9FEYPek4BmklUT_C4X7y0qPNivG4av5OZeoOy0/export?format=txt";
+// be enabled. The doc must stay shared as "anyone with the link can view". No URL
+// is baked into the firmware — it is set at runtime via the web UI and persisted
+// to /sdcard/gdoc_url.txt; empty until then, so gdocUpdate() is a no-op.
+static String docUrl = "";
 
 static const int MAX_DOC_LINES = 12;
 static const int MAX_LINE_LEN = 48;  // chars kept per line (the display clips further)
@@ -37,13 +37,44 @@ static String sanitize(const String &raw) {
   return out;
 }
 
+// Accept a normal Google Docs link and convert it to the plain-text export form;
+// pass-through anything that isn't a recognizable docs URL.
+static String normalizeDocUrl(const String &in) {
+  int d = in.indexOf("/d/");
+  if (d < 0) return in;
+  int idStart = d + 3;
+  int idEnd = in.indexOf('/', idStart);
+  String id = (idEnd < 0) ? in.substring(idStart) : in.substring(idStart, idEnd);
+  if (id.length() == 0) return in;
+  return "https://docs.google.com/document/d/" + id + "/export?format=txt";
+}
+
+void gdocSetUrl(const String &url) {
+  if (url.length() == 0) return;  // empty -> keep current
+  docUrl = normalizeDocUrl(url);
+}
+const String &gdocUrl() {
+  return docUrl;
+}
+void gdocSaveUrl() {
+  if (sdWriteText("gdoc_url.txt", docUrl)) logInfo("gdoc URL saved to SD");
+}
+void gdocLoadUrl() {
+  String u = sdReadText("gdoc_url.txt");
+  u.trim();
+  if (u.length()) {
+    gdocSetUrl(u);
+    logInfo("gdoc URL loaded from SD");
+  }
+}
+
 void gdocUpdate() {
-  if (!wifiConnected()) return;
+  if (!wifiConnected() || docUrl.length() == 0) return;
   WiFiClientSecure client;
   client.setInsecure();  // skip cert validation (same approach as the weather fetch)
 
   HTTPClient http;
-  if (!http.begin(client, DOC_URL)) return;
+  if (!http.begin(client, docUrl)) return;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);  // 307 -> googleusercontent.com
   // Browser-like UA reduces the chance of being bounced by anti-bot filtering.
   http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");

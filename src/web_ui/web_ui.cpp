@@ -6,6 +6,7 @@
 #include "../sensors/sensors.h"            // live temp/humidity shown on the page
 #include "../wifi_net/wifi_net.h"          // add/list saved Wi-Fi networks from the form
 #include "../sdcard/sdcard.h"              // persist the to-do list to /sdcard/todo.md
+#include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../logging/logging.h"
 #include <WebServer.h>
 
@@ -79,6 +80,13 @@ static void handleRoot() {
   if (todoCount < MAX_TODOS)
     html += "<button type='submit' name='action' value='add'>+</button>";
   html += "<button type='submit' name='action' value='save'>Save</button></form>";
+
+  // Google Doc URL shown in the Notes box (a normal Docs link is normalized to the
+  // plain-text export). Persisted to /sdcard/gdoc_url.txt.
+  html += "<hr><h2>Google Doc</h2><form action='/gdoc' method='POST'>"
+          "<p>Doc URL:<br><input type='text' name='url' style='width:90%' value='";
+  html += htmlEscape(gdocUrl());
+  html += "'></p><button type='submit'>Save</button></form>";
 
   // Claude usage credentials (kept in RAM on the device, never in the firmware).
   // The stored session key is NEVER written into the page, so anyone on the LAN
@@ -173,6 +181,17 @@ static void handleClaude() {
   server.send(303);
 }
 
+static void handleGdoc() {
+  if (server.hasArg("url")) {
+    gdocSetUrl(server.arg("url"));  // normalizes a Docs link to the txt export
+    gdocSaveUrl();                  // persist to /sdcard/gdoc_url.txt
+    logInfo("gdoc URL updated via web UI");
+    gdocUpdate();  // refresh the Notes box now
+  }
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
 // Persist the to-do list to the SD card as a markdown checklist:
 //   - [x] done item
 //   - [ ] open item
@@ -254,6 +273,7 @@ void webBegin() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
+  server.on("/gdoc", HTTP_POST, handleGdoc);
   server.on("/wifi", HTTP_POST, handleWifi);
   server.on("/wifiedit", HTTP_POST, handleWifiEdit);
   server.on("/wifisave", HTTP_POST, handleWifiSave);

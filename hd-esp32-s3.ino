@@ -210,7 +210,7 @@ void drawScreen() {
   // Temperature + humidity on one row in the upper-left under the date:
   // thermometer + value on the left, droplet + value on the right. Each icon is
   // offset by its own bulb radius so it sits centered over its column.
-  const int icoH = 22, iconY = 54;    // ~80% icon, vertically centered in the section
+  const int icoH = 22, iconY = 46;    // ~80% icon, pulled up to keep the temp/humi band tight
   const int tempCx = mx + 14;         // thermometer column center
   const int humiCx = mx + 14 + 90;    // droplet column center, 90 px to the right
   const int textBase = iconY + icoH;  // value baseline at the icon bottom
@@ -230,13 +230,15 @@ void drawScreen() {
   drawDocBox(190, 38, DISP_W - 190 - 8, 130);
 
   // Separator under the temp/humidity column — left column only, clear of the to-do box.
-  u8g2->drawHLine(mx, 102, 172);
+  // Pulled up so temp/humi stays compact and the weather rows below get more room.
+  u8g2->drawHLine(mx, 82, 172);
 
-  // Weather: one horizontal temperature-gauge row per city.
-  int wy = 108;
+  // Weather: one horizontal temperature-gauge row per city, started higher and
+  // spaced wider to fill the larger band down to the y=172 divider.
+  int wy = 90;
   for (int i = 0; i < NUM_CITIES; i++) {
     drawWeatherRow(mx, wy, 172, cities[i]);
-    wy += 28;
+    wy += 36;
   }
 
   // Divider below the main content (weather column + to-do box).
@@ -335,6 +337,7 @@ void setup() {
 
   loadClaudeCreds();
   wifiLoadNetworks();
+  gdocLoadUrl();  // restore the configured Google Doc URL before the first gdocUpdate()
 
   drawScreen();
   wifiSetRedrawHook(drawScreen);  // let wifiBegin() show "Trying <ssid>" on the footer
