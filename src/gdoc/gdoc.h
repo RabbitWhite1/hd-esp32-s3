@@ -17,7 +17,7 @@ const char *gdocTitle();      // document title (from the export filename); "" i
 time_t gdocAsOf();            // wall-clock time of the last successful fetch (0 = never)
 
 // Doc URL configuration (overridable + persisted to /sdcard/gdoc_url.txt).
-void gdocSetUrl(const String &url);  // set the URL (a normal Docs link is normalized to the txt export)
+void gdocSetUrl(const String &url);  // set the URL (a normal Docs link is reduced to the base doc URL; the txt-export suffix is added at fetch time)
 const String &gdocUrl();             // current doc URL
 void gdocLoadUrl();                  // load the URL from SD (call before gdocUpdate)
 void gdocSaveUrl();                  // persist the current URL to SD

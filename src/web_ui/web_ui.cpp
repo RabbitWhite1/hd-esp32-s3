@@ -73,7 +73,9 @@ static void handleRoot() {
     html += i;
     html += "' value='";
     html += htmlEscape(todos[i].text);
-    html += "'></li>";
+    html += "'> <button type='submit' name='action' value='del";
+    html += i;
+    html += "'>x</button></li>";
   }
   html += "</ul>";
   // "+" adds a blank row (a server round-trip that also preserves current edits).
@@ -81,8 +83,9 @@ static void handleRoot() {
     html += "<button type='submit' name='action' value='add'>+</button>";
   html += "<button type='submit' name='action' value='save'>Save</button></form>";
 
-  // Google Doc URL shown in the Notes box (a normal Docs link is normalized to the
-  // plain-text export). Persisted to /sdcard/gdoc_url.txt.
+  // Google Doc URL shown in the Notes box (paste a normal Docs/sharing link; it's
+  // reduced to the base doc URL and the txt export is fetched in code). Persisted
+  // to /sdcard/gdoc_url.txt.
   html += "<hr><h2>Google Doc</h2><form action='/gdoc' method='POST'>"
           "<p>Doc URL:<br><input type='text' name='url' style='width:90%' value='";
   html += htmlEscape(gdocUrl());
@@ -218,11 +221,9 @@ static void todoLoad() {
       char mark = line[b + 3];
       String text = ((int)line.length() > b + 5) ? line.substring(b + 5) : String("");
       text.trim();
-      if (text.length() > 0) {
-        todos[todoCount].done = (mark == 'x' || mark == 'X');
-        todos[todoCount].text = text;
-        todoCount++;
-      }
+      todos[todoCount].done = (mark == 'x' || mark == 'X');
+      todos[todoCount].text = text;  // empty items are kept
+      todoCount++;
     }
     if (nl < 0) break;
     start = nl + 1;
@@ -251,17 +252,18 @@ static void handleSave() {
       todos[todoCount].done = false;
       todoCount++;
     }
-  } else {
-    // Save: drop blank-text items so the LCD list stays clean.
-    int w = 0;
-    for (int i = 0; i < todoCount; i++) {
-      if (todos[i].text.length() > 0) {
-        if (w != i) todos[w] = todos[i];
-        w++;
-      }
+  } else if (action.startsWith("del")) {
+    // Remove the item at the given index (rebuildFromArgs kept the other edits).
+    int idx = action.substring(3).toInt();
+    if (idx >= 0 && idx < todoCount) {
+      for (int j = idx; j < todoCount - 1; j++) todos[j] = todos[j + 1];
+      todoCount--;
     }
-    todoCount = w;
-    todoSave();  // persist the committed list to /sdcard/todo.md
+    todoSave();  // removal is durable
+    logInfo("To-do item %d removed (%d left)", idx, todoCount);
+  } else {
+    // Save the list as-is; empty items are kept.
+    todoSave();  // persist to /sdcard/todo.md
     logInfo("To-do saved (%d items)", todoCount);
   }
   server.sendHeader("Location", "/");

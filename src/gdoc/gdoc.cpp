@@ -37,16 +37,19 @@ static String sanitize(const String &raw) {
   return out;
 }
 
-// Accept a normal Google Docs link and convert it to the plain-text export form;
-// pass-through anything that isn't a recognizable docs URL.
+// Reduce a normal Google Docs link to the canonical base URL (no /edit, no query,
+// no export suffix); pass-through anything that isn't a recognizable docs URL.
+// The "/export?format=txt" is appended only at fetch time (see gdocUpdate).
 static String normalizeDocUrl(const String &in) {
   int d = in.indexOf("/d/");
   if (d < 0) return in;
   int idStart = d + 3;
   int idEnd = in.indexOf('/', idStart);
+  int q = in.indexOf('?', idStart);
+  if (q >= 0 && (idEnd < 0 || q < idEnd)) idEnd = q;  // stop at a query if it comes first
   String id = (idEnd < 0) ? in.substring(idStart) : in.substring(idStart, idEnd);
   if (id.length() == 0) return in;
-  return "https://docs.google.com/document/d/" + id + "/export?format=txt";
+  return "https://docs.google.com/document/d/" + id;
 }
 
 void gdocSetUrl(const String &url) {
@@ -73,8 +76,9 @@ void gdocUpdate() {
   WiFiClientSecure client;
   client.setInsecure();  // skip cert validation (same approach as the weather fetch)
 
+  String fetchUrl = docUrl + "/export?format=txt";  // export suffix added only for the fetch
   HTTPClient http;
-  if (!http.begin(client, docUrl)) return;
+  if (!http.begin(client, fetchUrl)) return;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);  // 307 -> googleusercontent.com
   // Browser-like UA reduces the chance of being bounced by anti-bot filtering.
   http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
@@ -110,13 +114,16 @@ void gdocUpdate() {
       (uint8_t)payload[1] == 0xBB && (uint8_t)payload[2] == 0xBF)
     payload.remove(0, 3);
 
-  // Split on newlines, keeping blank lines too (they separate paragraphs in the
-  // doc); only trailing blank lines are dropped below.
+  // Split on newlines, keeping blank lines (they separate paragraphs) but
+  // collapsing a run of consecutive blanks into a single blank — the Google txt
+  // export emits two blank lines per paragraph gap. Trailing blanks are dropped.
   lineCount = 0;
   int start = 0;
   while (start <= (int)payload.length() && lineCount < MAX_DOC_LINES) {
     int nl = payload.indexOf('\n', start);
-    lines[lineCount++] = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
+    String s = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
+    bool prevBlank = (lineCount > 0 && lines[lineCount - 1].length() == 0);
+    if (s.length() > 0 || !prevBlank) lines[lineCount++] = s;  // skip a 2nd+ consecutive blank
     if (nl < 0) break;
     start = nl + 1;
   }
