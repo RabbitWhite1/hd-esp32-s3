@@ -10,6 +10,8 @@
 #include "src/web_ui/web_ui.h"               // webBegin / webHandle / webTodo*
 #include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
+#include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
+#include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -37,30 +39,34 @@ const unsigned long SAMPLE_INTERVAL = 10 * 1000;
 const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
 const unsigned long CLAUDE_USAGE_INTERVAL = 30UL * 60 * 1000;  // refresh Claude usage every 30 min
+const unsigned long GDOC_INTERVAL = 4UL * 60 * 60 * 1000;      // refresh the Google Doc notes every 4 hours
 unsigned long lastSample = 0;
 unsigned long lastWeather = 0;
 unsigned long lastClaudeUsage = 0;
+unsigned long lastGdoc = 0;
 unsigned long sampleCount = 0;
 
 // latest sensor readings cached for redraw
 float lastTemp = NAN, lastHum = NAN;
 bool sensorOK = false;
 
+// Last Claude org+key pair written to SD, so the loop only rewrites on change.
+String lastSavedClaude = "";
+
 // KEY debounce state
 int keyPrev = HIGH;
 unsigned long keyLastChange = 0;
 
 // ---------- chime ----------
-// Generate a short two-note chime as 16-bit stereo PCM and play it.
-void playChime() {
+// Play a sequence of notes as 16-bit stereo PCM through the codec, each note
+// fading in/out so the transitions don't click.
+static void playNotes(const int *noteFreqs, int numNotes, int noteMs) {
   if (!codec) return;
   const int sampleRate = 16000;
   codec->CodecPort_SetInfo("es8311", 1, sampleRate, 2, 16);  // open playback
   codec->CodecPort_SetSpeakerVol(85);
 
-  const int noteFreqs[2] = { 880, 1175 };  // A5 then D6
-  const int noteMs = 120;
-  for (int n = 0; n < 2; n++) {
+  for (int n = 0; n < numNotes; n++) {
     int samples = sampleRate * noteMs / 1000;
     for (int i = 0; i < samples; i += 64) {
       int16_t buf[64 * 2];  // stereo interleaved
@@ -79,6 +85,18 @@ void playChime() {
       codec->CodecPort_PlayWrite(buf, chunk * 2 * sizeof(int16_t));
     }
   }
+}
+
+// Short single-note blip for immediate KEY-press feedback.
+void playChimeShort() {
+  const int notes[1] = { 1175 };  // D6
+  playNotes(notes, 1, 90);
+}
+
+// Longer ascending jingle signalling a refresh (or boot) has finished.
+void playChimeLong() {
+  const int notes[4] = { 880, 1047, 1319, 1568 };  // A5 - C6 - E6 - G6
+  playNotes(notes, 4, 140);
 }
 
 void drawThermometer(int x, int y, int h) {
@@ -126,6 +144,31 @@ void drawTodoBox(int x, int y, int w, int h) {
     snprintf(line, sizeof(line), "%.*s", maxChars, webTodoText(i));
     u8g2->drawStr(cbx + 12, ty, line);
     if (webTodoDone(i)) u8g2->drawHLine(cbx + 12, ty - 3, (int)strlen(line) * 6);
+    ty += 13;
+  }
+}
+
+// Render the fetched Google Doc lines inside a framed box, styled like the to-do
+// box (titled header + rule, then one clipped line per paragraph).
+void drawDocBox(int x, int y, int w, int h) {
+  u8g2->drawFrame(x, y, w, h);
+  u8g2->setFont(u8g2_font_6x10_tf);
+  const char *t = gdocTitle();
+  u8g2->drawStr(x + 6, y + 11, (t && t[0]) ? t : "Doc");  // the Google Doc's own title
+  u8g2->drawHLine(x + 4, y + 15, w - 8);
+
+  int n = gdocLineCount();
+  if (n == 0) {
+    u8g2->drawStr(x + 6, y + 28, gdocOk() ? "(empty)" : "(no data)");
+    return;
+  }
+  int maxChars = (w - 12) / 6;  // chars that fit inside the box padding
+  if (maxChars > 40) maxChars = 40;
+  int ty = y + 28;  // first line's text baseline
+  for (int i = 0; i < n && ty <= y + h - 4; i++) {
+    char line[44];
+    snprintf(line, sizeof(line), "%.*s", maxChars, gdocLine(i));
+    u8g2->drawStr(x + 6, ty, line);
     ty += 13;
   }
 }
@@ -182,8 +225,8 @@ void drawScreen() {
   else snprintf(buf, sizeof(buf), "-- %%");
   u8g2->drawStr(mx + 33, 94, buf);
 
-  // To-do box to the right of the temp/humidity column.
-  drawTodoBox(190, 38, DISP_W - 190 - 8, 130);
+  // Google Doc box to the right of the temp/humidity column.
+  drawDocBox(190, 38, DISP_W - 190 - 8, 130);
 
   // Separator under the temp/humidity column — left column only, clear of the to-do box.
   u8g2->drawHLine(mx, 102, 172);
@@ -198,26 +241,37 @@ void drawScreen() {
   // Divider below the main content (weather column + to-do box).
   u8g2->drawHLine(mx, 172, lineW);
 
-  // Claude usage, just below the second full divider.
+  // The region below the second divider is split in two: Claude usage on the left
+  // half, the Google Doc "Notes" box on the right half.
+  const int halfGap = 10;
+  const int halfW = (lineW - halfGap) / 2;
+  const int rightX = mx + halfW + halfGap;
+
+  // Claude usage (left half). The title keeps its full width within the half; the
+  // "As of" timestamp drops to a small second line so it fits.
   u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(mx, 187, "Claude Usage");
+  u8g2->setFont(u8g2_font_5x7_tf);
   time_t cuAsOf = claudeUsageAsOf();
   if (cuAsOf > 0) {
     struct tm cuTm;
     localtime_r(&cuAsOf, &cuTm);
-    char asOfStr[24];
-    strftime(asOfStr, sizeof(asOfStr), "%Y-%m-%d %H:%M:%S", &cuTm);
-    snprintf(buf, sizeof(buf), "Claude Usage (As of %s)", asOfStr);
+    char asOfStr[28];
+    strftime(asOfStr, sizeof(asOfStr), "As of %Y-%m-%d %H:%M", &cuTm);
+    u8g2->drawStr(mx, 197, asOfStr);
   } else {
-    snprintf(buf, sizeof(buf), "Claude Usage (never)");
+    u8g2->drawStr(mx, 197, "never updated");
   }
-  u8g2->drawStr(mx, 187, buf);
   // Mascot on the left; the two gauges are shifted right to make room for it.
   const int clawdGap = 6;
   const int gaugeX = mx + CLAWD_ICON_W + clawdGap;
-  const int gaugeW = lineW - (CLAWD_ICON_W + clawdGap);
-  u8g2->drawXBMP(mx, 207 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
-  drawUsageBar(gaugeX, 195, gaugeW, "5h", claudeFiveHour());
-  drawUsageBar(gaugeX, 211, gaugeW, "7d", claudeSevenDay());
+  const int gaugeW = halfW - (CLAWD_ICON_W + clawdGap);
+  u8g2->drawXBMP(mx, 222 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
+  drawUsageBar(gaugeX, 210, gaugeW, "5h", claudeFiveHour());
+  drawUsageBar(gaugeX, 226, gaugeW, "7d", claudeSevenDay());
+
+  // To-do list (right half), in a framed box.
+  drawTodoBox(rightX, 176, mx + lineW - rightX, 102);
 
   // Wi-Fi footer pinned to the bottom, with a divider right above it.
   u8g2->drawHLine(mx, 283, lineW);
@@ -229,6 +283,24 @@ void drawScreen() {
 
   if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
+}
+
+// ---------- Claude credential persistence (one id-key pair on the SD card) ----------
+// Stored as "<orgId>\n<sessionKey>"; a new pair overwrites the old one.
+bool saveClaudeCreds() {
+  return sdWriteText("claude.txt", claudeUsageOrgId() + "\n" + claudeUsageSessionKey());
+}
+void loadClaudeCreds() {
+  String data = sdReadText("claude.txt");
+  if (data.length() == 0) return;
+  int nl = data.indexOf('\n');
+  String org = (nl < 0) ? data : data.substring(0, nl);
+  String key = (nl < 0) ? String("") : data.substring(nl + 1);
+  org.trim();
+  key.trim();
+  if (org.length()) claudeUsageSetOrgId(org);
+  if (key.length()) claudeUsageSetSessionKey(key);
+  logInfo("Claude creds loaded from SD");
 }
 
 void setup() {
@@ -245,6 +317,22 @@ void setup() {
   sensorOK = sensorsPresent();
   codec = new CodecPort(I2cbus, "S3_RLCD_4_2");
 
+  // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
+  // connecting, so wifiBegin() can try the saved networks.
+  sdBegin();
+
+  // ============================ ONE-TIME SD FORMAT ============================
+  // Wipes the card to a fresh FAT filesystem on EVERY boot — here only to prepare
+  // a raw/unreadable card. >>> COMMENT OUT the sdFormat() line below <<< once the
+  // card is prepared, otherwise the saved Claude key + Wi-Fi list are erased each
+  // boot. The two lines after it re-persist what we loaded above so the freshly
+  // wiped card isn't left empty; they are harmless to keep (or remove together).
+  // sdFormat();
+  // ===========================================================================
+
+  loadClaudeCreds();
+  wifiLoadNetworks();
+
   drawScreen();
   wifiBegin();
   timeBegin();
@@ -253,8 +341,10 @@ void setup() {
   lastWeather = millis();
   claudeUsageUpdate();
   lastClaudeUsage = millis();
+  gdocUpdate();
+  lastGdoc = millis();
   drawScreen();
-  playChime();  // boot confirmation beep
+  playChimeLong();  // boot updates done
 }
 
 void loop() {
@@ -267,12 +357,15 @@ void loop() {
     keyLastChange = millis();
     if (k == LOW) {
       logInfo("KEY pressed -> chime + refresh");
-      playChime();
+      playChimeShort();            // immediate press feedback
       weatherUpdateAll();
       claudeUsageUpdate();
+      gdocUpdate();
       lastWeather = millis();      // reset the periodic timers so the next auto-refresh is a full interval away
       lastClaudeUsage = millis();
+      lastGdoc = millis();
       drawScreen();                // show the freshly fetched data
+      playChimeLong();             // updates done
     }
     keyPrev = k;
   }
@@ -286,6 +379,18 @@ void loop() {
   if (now - lastClaudeUsage >= CLAUDE_USAGE_INTERVAL) {
     lastClaudeUsage = now;
     claudeUsageUpdate();
+  }
+
+  if (now - lastGdoc >= GDOC_INTERVAL) {
+    lastGdoc = now;
+    gdocUpdate();
+  }
+
+  // Persist the Claude org id + session key to SD once provided, rewriting only
+  // when it changes. Exactly one pair is kept on the card (new overwrites old).
+  if (claudeUsageHasKey()) {
+    String cur = claudeUsageOrgId() + "\n" + claudeUsageSessionKey();
+    if (cur != lastSavedClaude && saveClaudeCreds()) lastSavedClaude = cur;
   }
 
   if (now - lastSample >= SAMPLE_INTERVAL) {

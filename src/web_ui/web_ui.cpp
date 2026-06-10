@@ -1,8 +1,12 @@
 #include "web_ui.h"
 #include "../claude_usage/claude_usage.h"  // configure org id + session key from the web form
 #include "../sensors/sensors.h"            // live temp/humidity shown on the page
+#include "../wifi_net/wifi_net.h"          // add/list saved Wi-Fi networks from the form
 #include "../logging/logging.h"
 #include <WebServer.h>
+
+// Result of the most recent "add Wi-Fi" attempt, shown back on the page.
+static String lastWifiMsg = "";
 
 static const int MAX_TODOS = 8;
 
@@ -80,8 +84,40 @@ static void handleRoot() {
   html += htmlEscape(claudeUsageSessionKey());
   html += "'></p><button type='submit'>Save</button></form>";
 
+  // Wi-Fi: list the saved (known-good) networks and add a new one. A network is
+  // only stored once the device has confirmed it can actually connect to it.
+  html += "<hr><h2>Wi-Fi</h2>";
+  if (lastWifiMsg.length()) {
+    html += "<p><b>";
+    html += htmlEscape(lastWifiMsg);
+    html += "</b></p>";
+  }
+  html += "<p>Saved networks:</p><ul>";
+  if (wifiNetCount() == 0) html += "<li>(none)</li>";
+  for (int i = 0; i < wifiNetCount(); i++) {
+    html += "<li>";
+    html += htmlEscape(wifiNetSSID(i));
+    html += "</li>";
+  }
+  html += "</ul><form action='/wifi' method='POST'>"
+          "<p>SSID:<br><input type='text' name='ssid'></p>"
+          "<p>Password:<br><input type='text' name='pass'></p>"
+          "<button type='submit'>Add (tests before saving)</button></form>";
+
   html += "</body></html>";
   server.send(200, "text/html", html);
+}
+
+static void handleWifi() {
+  String s = server.hasArg("ssid") ? server.arg("ssid") : "";
+  String p = server.hasArg("pass") ? server.arg("pass") : "";
+  // Note: testing a new network drops the current link, so this HTTP response
+  // may not reach the browser; reconnect via http://esp32.local/ afterwards.
+  bool ok = wifiAddNetwork(s, p);
+  lastWifiMsg = ok ? ("Connected & saved: " + s) : ("Could not connect to '" + s + "' - not saved");
+  logInfo("WiFi add via web: %s -> %s", s.c_str(), ok ? "saved" : "rejected");
+  server.sendHeader("Location", "/");
+  server.send(303);
 }
 
 static void handleClaude() {
@@ -134,6 +170,7 @@ void webBegin() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
+  server.on("/wifi", HTTP_POST, handleWifi);
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
   server.begin();
   logInfo("Web UI listening on port 80");
