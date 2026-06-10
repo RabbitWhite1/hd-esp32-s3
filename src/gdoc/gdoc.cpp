@@ -13,7 +13,7 @@
 static String docUrl = "";
 
 static const int MAX_DOC_LINES = 12;
-static const int MAX_LINE_LEN = 48;  // chars kept per line (the display clips further)
+static const int MAX_LINE_LEN = 64;  // chars kept per line (enough to fill the enlarged box)
 
 static String lines[MAX_DOC_LINES];
 static int lineCount = 0;
