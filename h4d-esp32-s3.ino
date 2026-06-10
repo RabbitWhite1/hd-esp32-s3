@@ -149,29 +149,30 @@ void drawTodoBox(int x, int y, int w, int h) {
   }
 }
 
-// Render the fetched Google Doc lines inside a framed box, styled like the to-do
-// box (titled header + rule, then one clipped line per paragraph).
+// Render the fetched Google Doc lines inside a framed box. Unlike the rest of the
+// UI, this box uses a GB2312 font (ASCII + Chinese) and drawUTF8, so Chinese text
+// renders here. Overflow is clipped to the box interior, so we don't have to
+// char-count (which is unreliable with mixed half/full-width glyphs).
 void drawDocBox(int x, int y, int w, int h) {
   u8g2->drawFrame(x, y, w, h);
-  u8g2->setFont(u8g2_font_6x10_tf);
+  u8g2->setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2->setClipWindow(x + 1, y + 1, x + w - 1, y + h - 1);  // keep text inside the box
+
   const char *t = gdocTitle();
-  u8g2->drawStr(x + 6, y + 11, (t && t[0]) ? t : "Doc");  // the Google Doc's own title
-  u8g2->drawHLine(x + 4, y + 15, w - 8);
+  u8g2->drawUTF8(x + 6, y + 13, (t && t[0]) ? t : "Doc");  // doc title (may be Chinese)
+  u8g2->drawHLine(x + 4, y + 17, w - 8);
 
   int n = gdocLineCount();
   if (n == 0) {
-    u8g2->drawStr(x + 6, y + 28, gdocOk() ? "(empty)" : "(no data)");
-    return;
+    u8g2->drawUTF8(x + 6, y + 31, gdocOk() ? "(empty)" : "(no data)");
+  } else {
+    int ty = y + 31;  // first line's baseline
+    for (int i = 0; i < n && ty <= y + h - 3; i++) {
+      u8g2->drawUTF8(x + 6, ty, gdocLine(i));
+      ty += 14;  // line height for the 12px GB2312 font
+    }
   }
-  int maxChars = (w - 12) / 6;  // chars that fit inside the box padding
-  if (maxChars > 64) maxChars = 64;
-  int ty = y + 28;  // first line's text baseline
-  for (int i = 0; i < n && ty <= y + h - 4; i++) {
-    char line[66];
-    snprintf(line, sizeof(line), "%.*s", maxChars, gdocLine(i));
-    u8g2->drawStr(x + 6, ty, line);
-    ty += 13;
-  }
+  u8g2->setMaxClipWindow();  // restore the full drawing area for the rest of the UI
 }
 
 // A labeled 0-100% utilization bar: "<label> [===    ] NN%", drawn from (x, y).

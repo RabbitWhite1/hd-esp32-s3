@@ -13,7 +13,7 @@
 static String docUrl = "";
 
 static const int MAX_DOC_LINES = 12;
-static const int MAX_LINE_LEN = 64;  // chars kept per line (enough to fill the enlarged box)
+static const int MAX_LINE_LEN = 96;  // bytes kept per line (UTF-8: ~32 Chinese or 96 ASCII)
 
 static String lines[MAX_DOC_LINES];
 static int lineCount = 0;
@@ -21,14 +21,19 @@ static String title = "";  // document title, parsed from the export filename
 static bool ok = false;
 static time_t asOf = 0;  // wall-clock time of the last successful fetch
 
-// Keep only printable ASCII and trim the ends: U8g2's basic fonts can't render the
-// UTF-8 multi-byte characters a Google Doc carries (smart quotes, emoji, etc.).
+// Keep printable ASCII and whole UTF-8 multi-byte sequences (so Chinese survives
+// for the GB2312-font Notes box); drop control bytes. Truncates on a character
+// boundary at MAX_LINE_LEN bytes so a multi-byte glyph is never split.
 static String sanitize(const String &raw) {
   String out;
   out.reserve(raw.length());
-  for (size_t i = 0; i < raw.length() && (int)out.length() < MAX_LINE_LEN; i++) {
+  size_t i = 0;
+  while (i < raw.length()) {
     uint8_t c = (uint8_t)raw[i];
-    if (c >= 0x20 && c < 0x7f) out += (char)c;  // drop control bytes + anything >= 0x80
+    if (c < 0x20 || c == 0x7f) { i++; continue; }  // skip control bytes (incl. \r \t)
+    int len = (c >= 0xF0) ? 4 : (c >= 0xE0) ? 3 : (c >= 0xC0) ? 2 : 1;  // UTF-8 length
+    if ((int)out.length() + len > MAX_LINE_LEN) break;  // stop at a char boundary
+    for (int k = 0; k < len && i < raw.length(); k++) out += (char)raw[i++];
   }
   out.trim();
   return out;
