@@ -21,6 +21,20 @@ static WifiNet nets[MAX_NETS];
 static int netCount = 0;
 static String currentSsid = "";  // name of the network we are actually joined to
 
+static String statusMsg = "";           // transient footer line during connection attempts
+static void (*redrawHook)() = nullptr;  // frontend redraw, called when statusMsg changes
+
+void wifiSetRedrawHook(void (*fn)()) {
+  redrawHook = fn;
+}
+const char *wifiStatus() {
+  return statusMsg.c_str();
+}
+static void setStatus(const String &s) {
+  statusMsg = s;
+  if (redrawHook) redrawHook();  // push the new status to the LCD footer now
+}
+
 // Re-advertise the web UI over mDNS. end() first so a reconnect restarts cleanly.
 static void startMdns() {
   MDNS.end();
@@ -49,14 +63,17 @@ static bool tryConnect(const char *s, const char *p, uint32_t timeoutMs) {
 void wifiBegin() {
   WiFi.mode(WIFI_STA);
   bool connected = false;
-  for (int i = 0; i < netCount && !connected; i++)
+  for (int i = 0; i < netCount && !connected; i++) {
+    setStatus(String("Trying ") + nets[i].ssid);  // shown on the LCD footer
     connected = tryConnect(nets[i].ssid.c_str(), nets[i].pass.c_str(), 8000);
-  if (!connected) {
-    logError("WiFi: no known network joined");
-    return;
   }
-  logInfo("WiFi connected to %s, IP: %s", currentSsid.c_str(), WiFi.localIP().toString().c_str());
-  startMdns();
+  statusMsg = "";  // attempt phase over; footer reverts to joined/disconnected
+  if (connected)
+    logInfo("WiFi connected to %s, IP: %s", currentSsid.c_str(), WiFi.localIP().toString().c_str());
+  else
+    logError("WiFi: no known network joined");
+  if (connected) startMdns();
+  if (redrawHook) redrawHook();  // reflect the final state immediately
 }
 
 void wifiEnsureConnected() {
@@ -155,6 +172,28 @@ bool wifiAddNetwork(const String &s, const String &p) {
   startMdns();  // re-advertise on the new connection
   logInfo("WiFi network saved + connected: %s", s.c_str());
   return true;
+}
+
+bool wifiRemoveNetwork(const String &s) {
+  for (int i = 0; i < netCount; i++) {
+    if (nets[i].ssid == s) {
+      for (int j = i; j < netCount - 1; j++) nets[j] = nets[j + 1];
+      netCount--;
+      wifiSaveNetworks();
+      logInfo("WiFi network removed: %s", s.c_str());
+      return true;
+    }
+  }
+  return false;
+}
+
+bool wifiMoveNetwork(int idx, int dir) {
+  int j = idx + dir;
+  if (idx < 0 || idx >= netCount || j < 0 || j >= netCount) return false;
+  WifiNet tmp = nets[idx];
+  nets[idx] = nets[j];
+  nets[j] = tmp;
+  return true;  // RAM only; caller persists via wifiSaveNetworks()
 }
 
 int wifiNetCount() {

@@ -14,6 +14,10 @@ bool wifiConnected();
 const char *wifiSSID();      // the currently-joined network name (falls back to the default)
 String wifiIP();             // dotted-quad string, or "" when disconnected
 const char *wifiHostname();  // mDNS hostname; the device is reachable at "<name>.local"
+const char *wifiStatus();    // transient footer line during connect attempts ("" when idle/joined)
+// Register a frontend redraw (e.g. drawScreen) invoked while wifiBegin() iterates
+// the saved networks, so the footer can show "Trying <ssid>" live.
+void wifiSetRedrawHook(void (*fn)());
 
 // Saved-network list (persisted to /sdcard/wifi.txt).
 void wifiLoadNetworks();     // load the saved list from SD (call before wifiBegin)
@@ -26,5 +30,12 @@ bool wifiAddNetwork(const String &ssid, const String &pass);
 // Dedups by SSID. Requires the SD card mounted (call after sdBegin()). False
 // only for an empty SSID.
 bool wifiStoreNetwork(const String &ssid, const String &pass);
+// Remove a saved network by SSID and persist the list (does not drop an active
+// connection). Returns false if the SSID isn't in the list.
+bool wifiRemoveNetwork(const String &ssid);
+// Move the network at index up (dir=-1) or down (dir=+1) — i.e. change its
+// priority (index 0 is tried first). RAM only; persist with wifiSaveNetworks().
+// Returns false if the move would fall off either end.
+bool wifiMoveNetwork(int index, int dir);
 int wifiNetCount();              // number of saved networks
 const char *wifiNetSSID(int i);  // i-th saved SSID ("" if out of range)

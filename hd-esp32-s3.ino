@@ -29,7 +29,6 @@
 
 #define DISP_W 400
 #define DISP_H 300
-#define SHOW_DIAGNOSTIC true
 
 // One I2C bus shared by the SHTC3 sensor and the audio codec (scl=14, sda=13, port 0)
 I2cMasterBus I2cbus(14, 13, 0);
@@ -114,10 +113,6 @@ void drawDroplet(int x, int y, int h) {
   int r = h / 3, cx = x + r, cy = y + h - r;
   u8g2->drawDisc(cx, cy, r, U8G2_DRAW_ALL);
   u8g2->drawTriangle(cx, y, cx - r, cy, cx + r, cy);
-}
-void drawDiagnostic() {
-  for (int y = 50; y < DISP_H; y += 50) u8g2->drawHLine(0, y, 4);  // half-length edge ticks
-  for (int x = 50; x < DISP_W; x += 50) u8g2->drawVLine(x, 0, 4);
 }
 
 // Render the web-edited to-do list inside a framed box. Each item gets a small
@@ -212,21 +207,24 @@ void drawScreen() {
   else u8g2->drawStr(mx, 24, "Syncing time...");
   u8g2->drawHLine(mx, 30, lineW);
 
-  // Temperature + humidity, small, tucked into the upper-left under the date.
-  // Both icons are drawn from their left edge, but the thermometer bulb (r=h/6) is
-  // narrower than the droplet (r=h/3); offset each so they share one center column.
-  const int icoH = 22, icoCx = mx + 14;  // ~80% icon; shares a center column with the droplet
-  drawThermometer(icoCx - icoH / 6, 40, icoH);
+  // Temperature + humidity on one row in the upper-left under the date:
+  // thermometer + value on the left, droplet + value on the right. Each icon is
+  // offset by its own bulb radius so it sits centered over its column.
+  const int icoH = 22, iconY = 54;    // ~80% icon, vertically centered in the section
+  const int tempCx = mx + 14;         // thermometer column center
+  const int humiCx = mx + 14 + 90;    // droplet column center, 90 px to the right
+  const int textBase = iconY + icoH;  // value baseline at the icon bottom
   u8g2->setFont(u8g2_font_helvB12_tf);
+
+  drawThermometer(tempCx - icoH / 6, iconY, icoH);
   if (sensorOK && !isnan(lastTemp)) snprintf(buf, sizeof(buf), "%.1f C", lastTemp);
   else snprintf(buf, sizeof(buf), "-- C");
-  u8g2->drawStr(mx + 33, 62, buf);
+  u8g2->drawStr(tempCx + 19, textBase, buf);
 
-  drawDroplet(icoCx - icoH / 3, 72, icoH);
-  u8g2->setFont(u8g2_font_helvB12_tf);
+  drawDroplet(humiCx - icoH / 3, iconY, icoH);
   if (sensorOK && !isnan(lastHum)) snprintf(buf, sizeof(buf), "%.1f %%", lastHum);
   else snprintf(buf, sizeof(buf), "-- %%");
-  u8g2->drawStr(mx + 33, 94, buf);
+  u8g2->drawStr(humiCx + 19, textBase, buf);
 
   // Google Doc box to the right of the temp/humidity column.
   drawDocBox(190, 38, DISP_W - 190 - 8, 130);
@@ -282,9 +280,10 @@ void drawScreen() {
   if (wifiConnected()) {
     snprintf(buf, sizeof(buf), "SSID: %s    IP: %s    mDNS: %s.local", wifiSSID(), wifiIP().c_str(), wifiHostname());
     u8g2->drawStr(mx, 294, buf);
+  } else if (wifiStatus()[0]) {
+    u8g2->drawStr(mx, 294, wifiStatus());  // e.g. "Trying <ssid>" while wifiBegin() iterates
   } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
-  if (SHOW_DIAGNOSTIC) drawDiagnostic();
   u8g2->sendBuffer();
 }
 
@@ -318,6 +317,7 @@ void setup() {
   // SHTC3 + codec share I2cbus
   sensorsBegin(I2cbus);
   sensorOK = sensorsPresent();
+  if (sensorOK) sensorsRead(&lastTemp, &lastHum);  // populate temp/humidity before the first drawScreen (no Wi-Fi needed)
   codec = new CodecPort(I2cbus, "S3_RLCD_4_2");
 
   // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
@@ -337,16 +337,26 @@ void setup() {
   wifiLoadNetworks();
 
   drawScreen();
+  wifiSetRedrawHook(drawScreen);  // let wifiBegin() show "Trying <ssid>" on the footer
   wifiBegin();
   timeBegin();
-  webBegin();  // start the LAN message server once Wi-Fi is up
+  drawScreen();
+
   weatherUpdateAll();
   lastWeather = millis();
+  drawScreen();
+
+  webBegin();  // start the LAN message server once Wi-Fi is up
+  drawScreen();
+
   claudeUsageUpdate();
   lastClaudeUsage = millis();
+  drawScreen();
+
   gdocUpdate();
   lastGdoc = millis();
   drawScreen();
+
   playChimeLong();  // boot updates done
 }
 

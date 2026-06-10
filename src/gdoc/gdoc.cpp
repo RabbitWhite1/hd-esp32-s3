@@ -79,17 +79,17 @@ void gdocUpdate() {
       (uint8_t)payload[1] == 0xBB && (uint8_t)payload[2] == 0xBF)
     payload.remove(0, 3);
 
-  // Split on newlines, keeping only the non-empty lines (the export uses blank
-  // lines between paragraphs, which we skip so the box stays compact).
+  // Split on newlines, keeping blank lines too (they separate paragraphs in the
+  // doc); only trailing blank lines are dropped below.
   lineCount = 0;
   int start = 0;
   while (start <= (int)payload.length() && lineCount < MAX_DOC_LINES) {
     int nl = payload.indexOf('\n', start);
-    String s = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
-    if (s.length() > 0) lines[lineCount++] = s;
+    lines[lineCount++] = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
     if (nl < 0) break;
     start = nl + 1;
   }
+  while (lineCount > 0 && lines[lineCount - 1].length() == 0) lineCount--;  // drop trailing blanks
   ok = true;
   asOf = time(nullptr);
   logInfo("Doc fetched: %d lines", lineCount);
