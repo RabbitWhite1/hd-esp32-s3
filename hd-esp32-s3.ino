@@ -25,7 +25,7 @@
 
 // ---------- buttons (active-low; see Waveshare button_bsp) ----------
 #define KEY_PIN 18   // "GP18" button
-#define BOOT_PIN 0   // BOOT button; also the download strapping pin. Unused for now.
+#define BOOT_PIN 0   // BOOT button; also the download strapping pin. Cycles the on-screen view.
 
 #define DISP_W 400
 #define DISP_H 300
@@ -58,6 +58,12 @@ String lastSavedClaude = "";
 // KEY debounce state
 int keyPrev = HIGH;
 unsigned long keyLastChange = 0;
+
+// Screen views, cycled by the BOOT button.
+enum View { VIEW_OVERVIEW = 0, VIEW_GDOC, VIEW_TODO, VIEW_COUNT };
+int currentView = VIEW_OVERVIEW;
+int bootPrev = HIGH;
+unsigned long bootLastChange = 0;
 
 // ---------- chime ----------
 // Play a sequence of notes as 16-bit stereo PCM through the codec, each note
@@ -129,7 +135,7 @@ void drawTodoBox(int x, int y, int w, int h) {
     return;
   }
   int maxChars = (w - 20) / 6;  // chars that fit after the checkbox
-  if (maxChars > 40) maxChars = 40;
+  if (maxChars > 64) maxChars = 64;
   int ty = y + 28;  // first item's text baseline
   for (int i = 0; i < n && ty <= y + h - 4; i++) {
     int cbx = x + 6, cby = ty - 8;
@@ -138,7 +144,7 @@ void drawTodoBox(int x, int y, int w, int h) {
       u8g2->drawLine(cbx, cby, cbx + 7, cby + 7);
       u8g2->drawLine(cbx + 7, cby, cbx, cby + 7);
     }
-    char line[44];
+    char line[66];
     snprintf(line, sizeof(line), "%.*s", maxChars, webTodoText(i));
     u8g2->drawStr(cbx + 12, ty, line);
     if (webTodoDone(i)) u8g2->drawHLine(cbx + 12, ty - 3, (int)strlen(line) * 6);
@@ -161,10 +167,10 @@ void drawDocBox(int x, int y, int w, int h) {
     return;
   }
   int maxChars = (w - 12) / 6;  // chars that fit inside the box padding
-  if (maxChars > 40) maxChars = 40;
+  if (maxChars > 64) maxChars = 64;
   int ty = y + 28;  // first line's text baseline
   for (int i = 0; i < n && ty <= y + h - 4; i++) {
-    char line[44];
+    char line[66];
     snprintf(line, sizeof(line), "%.*s", maxChars, gdocLine(i));
     u8g2->drawStr(x + 6, ty, line);
     ty += 13;
@@ -195,17 +201,10 @@ void drawUsageBar(int x, int y, int w, const char *label, float pct) {
   }
 }
 
-void drawScreen() {
-  u8g2->clearBuffer();
-  u8g2->setDrawColor(1);
-  char buf[80];
-  const int mx = 12;                  // left margin, pulled toward the left edge
-  const int lineW = DISP_W - 8 - mx;  // full-width lines run from mx to the to-do box's right edge
-
-  u8g2->setFont(u8g2_font_6x13_tf);
-  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 24, buf);
-  else u8g2->drawStr(mx, 24, "Syncing time...");
-  u8g2->drawHLine(mx, 30, lineW);
+// Overview view: temp/humidity row, weather rows, the Notes box, Claude usage, and
+// the to-do box — the original composited layout between the header and footer.
+void drawOverview(int mx, int lineW) {
+  char buf[40];
 
   // Temperature + humidity on one row in the upper-left under the date:
   // thermometer + value on the left, droplet + value on the right. Each icon is
@@ -275,6 +274,29 @@ void drawScreen() {
 
   // To-do list (right half), in a framed box.
   drawTodoBox(rightX, 176, mx + lineW - rightX, 102);
+}
+
+void drawScreen() {
+  u8g2->clearBuffer();
+  u8g2->setDrawColor(1);
+  char buf[80];
+  const int mx = 12;                  // left margin, pulled toward the left edge
+  const int lineW = DISP_W - 8 - mx;  // full-width lines run from mx to the to-do box's right edge
+
+  u8g2->setFont(u8g2_font_6x13_tf);
+  if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 24, buf);
+  else u8g2->drawStr(mx, 24, "Syncing time...");
+  u8g2->drawHLine(mx, 30, lineW);
+
+  // Body depends on the selected view (cycled by the BOOT button). The gdoc/to-do
+  // views fill the whole band between the date header and the Wi-Fi footer.
+  if (currentView == VIEW_GDOC) {
+    drawDocBox(mx, 36, lineW, 244);
+  } else if (currentView == VIEW_TODO) {
+    drawTodoBox(mx, 36, lineW, 244);
+  } else {
+    drawOverview(mx, lineW);
+  }
 
   // Wi-Fi footer pinned to the bottom, with a divider right above it.
   u8g2->drawHLine(mx, 283, lineW);
@@ -315,6 +337,7 @@ void setup() {
   u8g2 = lcd.getU8g2();
 
   pinMode(KEY_PIN, INPUT_PULLUP);
+  pinMode(BOOT_PIN, INPUT_PULLUP);  // BOOT button cycles the on-screen view
 
   // SHTC3 + codec share I2cbus
   sensorsBegin(I2cbus);
@@ -384,6 +407,18 @@ void loop() {
       playChimeLong();             // updates done
     }
     keyPrev = k;
+  }
+
+  // BOOT button: debounce; on press cycle the view (overview -> gdoc -> to-do).
+  int b = digitalRead(BOOT_PIN);
+  if (b != bootPrev && millis() - bootLastChange > 40) {
+    bootLastChange = millis();
+    if (b == LOW) {
+      currentView = (currentView + 1) % VIEW_COUNT;
+      logInfo("BOOT pressed -> view %d", currentView);
+      drawScreen();
+    }
+    bootPrev = b;
   }
 
   unsigned long now = millis();
