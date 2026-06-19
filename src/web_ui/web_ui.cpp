@@ -54,11 +54,11 @@ static void handleRoot() {
   // Live temperature/humidity, read fresh on each page load.
   float tC = NAN, rh = NAN;
   bool haveSensor = sensorsPresent() && sensorsRead(&tC, &rh);
-  html += "<p>Temperature: ";
+  html += "\n<p>Temperature: ";
   html += haveSensor ? (String(tC, 1) + " &deg;C") : String("--");
   html += " &nbsp; Humidity: ";
   html += haveSensor ? (String(rh, 1) + " %") : String("--");
-  html += "</p>";
+  html += "</p>\n";
 
   html += "<h2>To-do</h2><form action='/save' method='POST'><ul>";
   for (int i = 0; i < todoCount; i++) {
