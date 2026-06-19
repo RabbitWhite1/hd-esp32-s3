@@ -7,6 +7,7 @@
 #include "src/weather/weather.h"             // City, cities[], weatherUpdateAll
 #include "src/weather/draw.h"                // drawWeatherRow (weather rendering)
 #include "src/sensors/sensors.h"             // sensorsBegin / sensorsPresent / sensorsRead
+#include "src/battery/battery.h"             // batteryBegin / batteryUpdate / batteryPercent
 #include "src/web_ui/web_ui.h"               // webBegin / webHandle / webTodo*
 #include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
@@ -274,6 +275,49 @@ void drawOverview(int mx, int lineW) {
   drawTodoBox(rightX, 176, mx + lineW - rightX, 102);
 }
 
+// A small lightning bolt (two interlocking filled triangles) drawn via XOR so it
+// stays visible over either the filled or empty part of the battery glyph.
+static void drawBolt(int cx, int y0) {
+  u8g2->setDrawColor(2);  // XOR
+  u8g2->drawTriangle(cx + 1, y0, cx - 2, y0 + 5, cx + 1, y0 + 5);
+  u8g2->drawTriangle(cx - 1, y0 + 9, cx + 2, y0 + 4, cx - 1, y0 + 4);
+  u8g2->setDrawColor(1);
+}
+
+// Battery indicator: a battery glyph filled proportionally to charge (held SoC
+// while charging), the percentage just to its left, the realtime terminal
+// voltage further left, and a bolt over the glyph while charging. rightX is the
+// right edge of the glyph.
+void drawBattery(int rightX, int topY) {
+  const int bw = 22, bh = 11, nub = 2;  // body width/height + positive-terminal nub
+  int bx = rightX - nub - bw;
+  int pct = batteryPercent();
+  bool chg = batteryCharging();
+  u8g2->drawFrame(bx, topY, bw, bh);
+  u8g2->drawBox(bx + bw, topY + (bh - 4) / 2, nub, 4);
+  if (pct >= 0) {
+    int fw = (bw - 4) * pct / 100;
+    if (fw > 0) u8g2->drawBox(bx + 2, topY + 2, fw, bh - 4);
+  }
+  if (chg) drawBolt(bx + bw / 2, topY + 1);
+
+  u8g2->setFont(u8g2_font_6x10_tf);
+  int baseY = topY + bh - 1;
+
+  // percentage just left of the glyph
+  char s[8];
+  if (pct >= 0) snprintf(s, sizeof(s), "%d%%", pct);
+  else snprintf(s, sizeof(s), "--%%");
+  int sx = bx - 4 - u8g2->getStrWidth(s);
+  u8g2->drawStr(sx, baseY, s);
+
+  // realtime terminal voltage, always shown, further left
+  char v[10];
+  if (!isnan(batteryVoltage())) snprintf(v, sizeof(v), "%.2fV", batteryVoltage());
+  else snprintf(v, sizeof(v), "--V");
+  u8g2->drawStr(sx - 5 - u8g2->getStrWidth(v), baseY, v);
+}
+
 void drawScreen() {
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
@@ -284,6 +328,7 @@ void drawScreen() {
   u8g2->setFont(u8g2_font_6x13_tf);
   if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 24, buf);
   else u8g2->drawStr(mx, 24, "Syncing time...");
+  drawBattery(DISP_W - 8, 12);  // top-right corner, above the header divider
   u8g2->drawHLine(mx, 30, lineW);
 
   // Body depends on the selected view (cycled by the BOOT button). The gdoc/to-do
@@ -341,6 +386,7 @@ void setup() {
   sensorsBegin(I2cbus);
   sensorOK = sensorsPresent();
   if (sensorOK) sensorsRead(&lastTemp, &lastHum);  // populate temp/humidity before the first drawScreen (no Wi-Fi needed)
+  batteryBegin();                                  // prime the battery reading before the first drawScreen
   codec = new CodecPort(I2cbus, "S3_RLCD_4_2");
 
   // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
@@ -444,6 +490,7 @@ void loop() {
 
   if (now - lastSample >= SAMPLE_INTERVAL) {
     lastSample = now;
+    batteryUpdate();  // refresh the battery gauge alongside the temp/humidity sample
     bool gotReading = sensorOK && sensorsRead(&lastTemp, &lastHum);
     // print temp/humidity once every SAMPLE_PRINT_INTERVAL (= every Nth sample)
     if (gotReading && ++sampleCount % (SAMPLE_PRINT_INTERVAL / SAMPLE_INTERVAL) == 0)
