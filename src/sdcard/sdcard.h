@@ -15,3 +15,7 @@ bool sdFormat();   // wipe the card to a fresh FAT filesystem (requires a mounte
 
 bool sdWriteText(const char *name, const String &text);  // overwrite /sdcard/<name>; true on success
 String sdReadText(const char *name);                     // whole file as a String ("" if missing/unmounted)
+
+// Absolute path "/sdcard/<name>" for callers that stream a file directly with
+// fopen()/stat() (e.g. large cached assets). "" when no card is mounted.
+String sdPath(const char *name);

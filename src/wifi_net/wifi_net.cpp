@@ -106,6 +106,13 @@ String wifiIP() {
 
 // ---------- saved-network persistence ----------
 // File format: one "ssid\tpassword" line per network.
+// True once the priority order has been changed in RAM but not yet persisted to
+// SD; cleared whenever the list is saved or (re)loaded.
+static bool orderDirty = false;
+bool wifiOrderDirty() {
+  return orderDirty;
+}
+
 void wifiLoadNetworks() {
   netCount = 0;
   String data = sdReadText("wifi.txt");
@@ -123,6 +130,7 @@ void wifiLoadNetworks() {
     if (nl < 0) break;
     start = nl + 1;
   }
+  orderDirty = false;
   logInfo("WiFi: loaded %d saved network(s)", netCount);
 }
 
@@ -135,6 +143,7 @@ void wifiSaveNetworks() {
     out += '\n';
   }
   if (sdWriteText("wifi.txt", out)) logInfo("WiFi: saved %d network(s)", netCount);
+  orderDirty = false;
 }
 
 // Insert or update one network by SSID and persist the list. Dedups: an existing
@@ -193,6 +202,23 @@ bool wifiMoveNetwork(int idx, int dir) {
   WifiNet tmp = nets[idx];
   nets[idx] = nets[j];
   nets[j] = tmp;
+  orderDirty = true;
+  return true;  // RAM only; caller persists via wifiSaveNetworks()
+}
+
+bool wifiApplyOrder(const int *order, int count) {
+  // order[] must be a permutation of 0..netCount-1 (the new position -> old index).
+  if (count != netCount) return false;
+  bool seen[MAX_NETS] = {false};
+  for (int i = 0; i < count; i++) {
+    int o = order[i];
+    if (o < 0 || o >= netCount || seen[o]) return false;  // out of range or duplicate
+    seen[o] = true;
+  }
+  WifiNet reordered[MAX_NETS];
+  for (int i = 0; i < count; i++) reordered[i] = nets[order[i]];
+  for (int i = 0; i < count; i++) nets[i] = reordered[i];
+  orderDirty = true;
   return true;  // RAM only; caller persists via wifiSaveNetworks()
 }
 

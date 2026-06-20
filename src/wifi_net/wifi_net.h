@@ -37,5 +37,10 @@ bool wifiRemoveNetwork(const String &ssid);
 // priority (index 0 is tried first). RAM only; persist with wifiSaveNetworks().
 // Returns false if the move would fall off either end.
 bool wifiMoveNetwork(int index, int dir);
+// Reorder the whole list at once: order[i] is the OLD index that should land at
+// position i (a permutation of 0..count-1). RAM only; persist with
+// wifiSaveNetworks(). Returns false if order isn't a valid permutation.
+bool wifiApplyOrder(const int *order, int count);
+bool wifiOrderDirty();           // true once moved but not yet persisted (cleared by save/load)
 int wifiNetCount();              // number of saved networks
 const char *wifiNetSSID(int i);  // i-th saved SSID ("" if out of range)
