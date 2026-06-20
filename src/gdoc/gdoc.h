@@ -18,3 +18,7 @@ void gdocSetUrl(const String &url);  // set the URL (a normal Docs link is reduc
 const String &gdocUrl();             // current doc URL
 void gdocLoadUrl();                  // load the URL from SD (call before gdocUpdate)
 void gdocSaveUrl();                  // persist the current URL to SD
+
+// Auto-refresh interval, in minutes (backed by the shared esp32.conf store).
+int gdocIntervalMin();               // configured interval (>= 1; default 240)
+void gdocSetIntervalMin(int minutes);  // clamp to >= 1, then persist to config

@@ -17,3 +17,7 @@ void claudeUsageSetSessionKey(const String &key);  // pass "" to keep the curren
 const String &claudeUsageOrgId();
 const String &claudeUsageSessionKey();  // current session key ("" if unset)
 bool claudeUsageHasKey();  // true once a non-empty session key has been set
+
+// Auto-refresh interval, in minutes (backed by the shared esp32.conf store).
+int claudeUsageIntervalMin();             // configured interval (>= 1; default 30)
+void claudeUsageSetIntervalMin(int minutes);  // clamp to >= 1, then persist to config

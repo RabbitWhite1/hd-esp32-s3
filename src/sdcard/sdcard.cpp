@@ -58,6 +58,11 @@ static String fullPath(const char *name) {
   return p;
 }
 
+String sdPath(const char *name) {
+  if (!mounted) return String();
+  return fullPath(name);
+}
+
 bool sdWriteText(const char *name, const String &text) {
   if (!mounted) return false;
   String p = fullPath(name);

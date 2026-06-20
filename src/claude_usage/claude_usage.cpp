@@ -1,5 +1,6 @@
 #include "claude_usage.h"
 #include "../wifi_net/wifi_net.h"
+#include "../config/config.h"  // refresh interval persisted in esp32.conf
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -86,4 +87,17 @@ const String &claudeUsageSessionKey() {
 }
 bool claudeUsageHasKey() {
   return sessionKey.length() > 0;
+}
+
+static const char *CLAUDE_INTERVAL_KEY = "claude_refresh_min";
+static const int CLAUDE_INTERVAL_DEFAULT = 30;
+
+int claudeUsageIntervalMin() {
+  long m = configGetInt(CLAUDE_INTERVAL_KEY, CLAUDE_INTERVAL_DEFAULT);
+  return m < 1 ? 1 : (int)m;
+}
+void claudeUsageSetIntervalMin(int minutes) {
+  if (minutes < 1) minutes = 1;
+  configSetInt(CLAUDE_INTERVAL_KEY, minutes);
+  configSave();
 }

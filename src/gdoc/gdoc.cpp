@@ -1,6 +1,7 @@
 #include "gdoc.h"
 #include "../wifi_net/wifi_net.h"
 #include "../sdcard/sdcard.h"
+#include "../config/config.h"  // refresh interval persisted in esp32.conf
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -71,6 +72,19 @@ void gdocLoadUrl() {
     gdocSetUrl(u);
     logInfo("gdoc URL loaded from SD");
   }
+}
+
+static const char *GDOC_INTERVAL_KEY = "gdoc_refresh_min";
+static const int GDOC_INTERVAL_DEFAULT = 240;  // 4 hours
+
+int gdocIntervalMin() {
+  long m = configGetInt(GDOC_INTERVAL_KEY, GDOC_INTERVAL_DEFAULT);
+  return m < 1 ? 1 : (int)m;
+}
+void gdocSetIntervalMin(int minutes) {
+  if (minutes < 1) minutes = 1;
+  configSetInt(GDOC_INTERVAL_KEY, minutes);
+  configSave();
 }
 
 void gdocUpdate() {

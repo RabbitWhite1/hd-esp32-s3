@@ -13,6 +13,8 @@
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
 #include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
+#include "src/config/config.h"               // configBegin — small persistent key/value settings (esp32.conf)
+#include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -38,8 +40,8 @@ U8G2 *u8g2 = nullptr;
 const unsigned long SAMPLE_INTERVAL = 10 * 1000;
 const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
-const unsigned long CLAUDE_USAGE_INTERVAL = 30UL * 60 * 1000;  // refresh Claude usage every 30 min
-const unsigned long GDOC_INTERVAL = 4UL * 60 * 60 * 1000;      // refresh the Google Doc notes every 4 hours
+// Claude-usage and Google-Doc refresh intervals are user-configurable (minutes)
+// and live in esp32.conf — see claudeUsageIntervalMin() / gdocIntervalMin().
 unsigned long lastSample = 0;
 unsigned long lastWeather = 0;
 unsigned long lastClaudeUsage = 0;
@@ -234,7 +236,7 @@ void drawOverview(int mx, int lineW) {
   // Weather: one horizontal temperature-gauge row per city, started higher and
   // spaced wider to fill the larger band down to the y=172 divider.
   int wy = 90;
-  for (int i = 0; i < NUM_CITIES; i++) {
+  for (int i = 0; i < weatherCityCount(); i++) {
     drawWeatherRow(mx, wy, 172, cities[i]);
     wy += 36;
   }
@@ -392,6 +394,7 @@ void setup() {
   // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
   // connecting, so wifiBegin() can try the saved networks.
   sdBegin();
+  configBegin();  // load small persistent settings (esp32.conf) before features read them
 
   // ============================ ONE-TIME SD FORMAT ============================
   // Wipes the card to a fresh FAT filesystem on EVERY boot — here only to prepare
@@ -400,16 +403,20 @@ void setup() {
   // boot. The two lines after it re-persist what we loaded above so the freshly
   // wiped card isn't left empty; they are harmless to keep (or remove together).
   // sdFormat();
+  // wifiStoreNetwork("2493-26APR03", "greenG2493");
   // ===========================================================================
 
   loadClaudeCreds();
   wifiLoadNetworks();
   gdocLoadUrl();  // restore the configured Google Doc URL before the first gdocUpdate()
+  timeLoadZones();  // restore the selected primary/secondary time zones before timeBegin()
+  weatherLoadCities();  // restore the configured weather cities before the first weatherUpdateAll()
 
   drawScreen();
   wifiSetRedrawHook(drawScreen);  // let wifiBegin() show "Trying <ssid>" on the footer
   wifiBegin();
   timeBegin();
+  assetsEnsureFresh();  // refresh the cached web-UI assets (Bootstrap) if stale + online
   drawScreen();
 
   weatherUpdateAll();
@@ -471,12 +478,12 @@ void loop() {
     weatherUpdateAll();
   }
 
-  if (now - lastClaudeUsage >= CLAUDE_USAGE_INTERVAL) {
+  if (now - lastClaudeUsage >= claudeUsageIntervalMin() * 60UL * 1000UL) {
     lastClaudeUsage = now;
     claudeUsageUpdate();
   }
 
-  if (now - lastGdoc >= GDOC_INTERVAL) {
+  if (now - lastGdoc >= gdocIntervalMin() * 60UL * 1000UL) {
     lastGdoc = now;
     gdocUpdate();
   }
