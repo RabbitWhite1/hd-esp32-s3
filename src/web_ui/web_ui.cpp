@@ -196,24 +196,26 @@ static void handleRoot() {
   html += cssLink("/bootstrap.css");
   html +=
     "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:4rem}"
-    "@media(max-width:767px){#sidenav{position:static!important}}</style>"
+    "@media(max-width:767px){.sidenav{position:static!important}}</style>"
     "</head><body class='bg-body-tertiary'>"
     "<div id='app' class='container pb-4' style='max-width:980px'>"
     // Sticky title bar: stays pinned at the top while the page scrolls.
     "<div class='sticky-top bg-body-tertiary py-3 mb-3 border-bottom'>"
     "<h1 class='h3 m-0'>hd panel</h1></div>"
+    // Two top-level tabs: Dashboard (live data) and Configuration (settings).
+    "<ul class='nav nav-tabs mb-3' id='maintabs' role='tablist'>"
+    "<li class='nav-item'><button class='nav-link active' type='button' role='tab' "
+    "data-bs-toggle='tab' data-bs-target='#tab-dashboard'>Dashboard</button></li>"
+    "<li class='nav-item'><button class='nav-link' type='button' role='tab' "
+    "data-bs-toggle='tab' data-bs-target='#tab-config'>Configuration</button></li>"
+    "</ul><div class='tab-content'>"
+    // --- Dashboard tab: Now + To-do ---
+    "<div class='tab-pane fade show active' id='tab-dashboard' role='tabpanel'>"
     "<div class='row g-4'>"
-    // Left-side navigator: sticky on desktop, stacks on top on narrow screens.
     "<div class='col-12 col-md-3'>"
-    "<nav id='sidenav' class='nav flex-column position-sticky' style='top:4.5rem'>"
+    "<nav class='sidenav nav flex-column position-sticky' style='top:4.5rem'>"
     "<a class='nav-link' href='#now'>Now</a>"
     "<a class='nav-link' href='#todo'>To-do</a>"
-    "<a class='nav-link' href='#gdoc'>Google Doc</a>"
-    "<a class='nav-link' href='#tz'>Time zones</a>"
-    "<a class='nav-link' href='#weather'>Weather cities</a>"
-    "<a class='nav-link' href='#intervals'>Refresh intervals</a>"
-    "<a class='nav-link' href='#claude'>Claude usage</a>"
-    "<a class='nav-link' href='#wifi'>Wi-Fi</a>"
     "</nav></div>"
     "<div class='col-12 col-md-9'>";
 
@@ -270,6 +272,22 @@ static void handleRoot() {
     html += "<button class='btn btn-outline-secondary' type='submit' name='action' value='add'>+ Add row</button>";
   html += "</form>";
   html += cardClose;
+
+  // End of the Dashboard tab; open the Configuration tab (all the settings
+  // cards) with its own sticky navigator.
+  html += "</div></div></div>"  // /content col, /row, /#tab-dashboard
+          "<div class='tab-pane fade' id='tab-config' role='tabpanel'>"
+          "<div class='row g-4'>"
+          "<div class='col-12 col-md-3'>"
+          "<nav class='sidenav nav flex-column position-sticky' style='top:4.5rem'>"
+          "<a class='nav-link' href='#gdoc'>Google Doc</a>"
+          "<a class='nav-link' href='#tz'>Time zones</a>"
+          "<a class='nav-link' href='#weather'>Weather cities</a>"
+          "<a class='nav-link' href='#intervals'>Refresh intervals</a>"
+          "<a class='nav-link' href='#claude'>Claude usage</a>"
+          "<a class='nav-link' href='#wifi'>Wi-Fi</a>"
+          "</nav></div>"
+          "<div class='col-12 col-md-9'>";
 
   // Google Doc URL shown in the Notes box (paste a normal Docs/sharing link; it's
   // reduced to the base doc URL and the txt export is fetched in code). Persisted
@@ -453,7 +471,9 @@ static void handleRoot() {
           "</div></form>";
   html += cardClose;
 
-  html += "</div></div></div>";  // /content col, /row, /#app
+  html += "</div></div></div>"  // /content col, /row, /#tab-config
+          "</div>"              // /tab-content
+          "</div>";             // /#app
 
   // Toast host. The JS path appends toasts here after each fetch(); the no-JS
   // fallback (plain form post -> redirect) renders a one-shot flash toast inside.
@@ -501,11 +521,18 @@ static void handleRoot() {
           "c.appendChild(d);"
           "d.addEventListener('hidden.bs.toast',function(){d.remove();});"
           "new bootstrap.Toast(d,{delay:6000}).show();}"
-          "async function reloadApp(){try{"
+          "async function reloadApp(){"
+          // Remember which top-level tab is open so a save doesn't bounce the user
+          // back to Dashboard when the fresh #app (always Dashboard-active) loads.
+          "var am=document.querySelector('#maintabs .nav-link.active');"
+          "var tgt=am?am.getAttribute('data-bs-target'):null;"
+          "try{"
           "var r=await fetch('/',{headers:{'X-Requested-With':'fetch'}});"
           "var doc=new DOMParser().parseFromString(await r.text(),'text/html');"
           "var fresh=doc.getElementById('app');"
           "if(fresh)document.getElementById('app').replaceWith(fresh);}catch(e){}"
+          "if(tgt&&window.bootstrap){var nb=document.querySelector('#maintabs .nav-link[data-bs-target=\"'+tgt+'\"]');"
+          "if(nb)new bootstrap.Tab(nb).show();}"
           "initSortable();setupChart();}"
           // NOW trend chart. setupChart() seeds the date inputs (local time) +
           // wires controls; drawChart() queries /history for the averaged series.
