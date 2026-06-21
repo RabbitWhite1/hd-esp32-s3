@@ -542,7 +542,7 @@ static void handleRoot() {
           // Temperature y-axis: a fixed indoor band by default, stretched only on
           // the side where data actually goes past it (by 10% of that value).
           // Humidity is always pinned to 0-100. Tweak the band via these constants.
-          "var TEMP_MIN_C=0,TEMP_MAX_C=40;"
+          "var TEMP_MIN_C=10,TEMP_MAX_C=35;"
           "function tempRange(a){var lo=TEMP_MIN_C,hi=TEMP_MAX_C,v=[];"
           "for(var i=0;i<a.length;i++){if(a[i]!=null&&!isNaN(a[i]))v.push(a[i]);}"
           "if(v.length){var mn=Math.min.apply(null,v),mx=Math.max.apply(null,v);"
