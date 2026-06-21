@@ -9,7 +9,8 @@
 // lat/lon once via Open-Meteo's geocoding API) and the resolved coordinates are
 // persisted to /sdcard/cities.txt.
 struct City {
-  char name[32];
+  char name[32];   // city name only (drawn on the LCD, where width is tight)
+  char label[48];  // "City, Region, Country" (shown in the web UI list)
   float lat, lon, cur, hi, lo;
   bool ok;
   int code;    // WMO weather-interpretation code for the current condition (-1 = unknown)
@@ -19,7 +20,7 @@ struct City {
 extern City cities[];          // valid for indices [0, weatherCityCount())
 int weatherCityCount();        // number of configured cities
 int weatherMaxCities();        // capacity (the LCD weather band fits this many rows)
-const char *weatherCityName(int i);  // name of city i ("" if out of range)
+const char *weatherCityName(int i);  // full "City, Region, Country" label of city i ("" if out of range)
 
 void weatherUpdateAll();  // refresh every city; a city keeps its old fields on failure
 

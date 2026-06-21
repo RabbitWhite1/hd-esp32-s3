@@ -19,12 +19,12 @@ struct Zone {
 // so this list can be reordered freely.
 static const Zone ZONES[] = {
   {"HST10",                          "UTC-10 HST - Honolulu"},
-  {"AKST9AKDT,M3.2.0,M11.1.0",       "UTC-9 AKST - Anchorage"},
-  {"PST8PDT,M3.2.0,M11.1.0",         "UTC-8 PST - Los Angeles"},
-  {"MST7MDT,M3.2.0,M11.1.0",         "UTC-7 MST - Denver"},
+  {"AKST9AKDT,M3.2.0,M11.1.0",       "UTC-9 AKST/AKDT - Anchorage"},
+  {"PST8PDT,M3.2.0,M11.1.0",         "UTC-8 PST/PDT - Los Angeles"},
+  {"MST7MDT,M3.2.0,M11.1.0",         "UTC-7 MST/MDT - Denver"},
   {"MST7",                           "UTC-7 MST - Phoenix"},
-  {"CST6CDT,M3.2.0,M11.1.0",         "UTC-6 CST - Chicago"},
-  {"EST5EDT,M3.2.0,M11.1.0",         "UTC-5 EST - New York"},
+  {"CST6CDT,M3.2.0,M11.1.0",         "UTC-6 CST/CDT - Chicago"},
+  {"EST5EDT,M3.2.0,M11.1.0",         "UTC-5 EST/EDT - New York"},
   {"<-03>3",                         "UTC-3 BRT - Sao Paulo"},
   {"GMT0BST,M3.5.0/1,M10.5.0",       "UTC+0 GMT - London"},
   {"CET-1CEST,M3.5.0,M10.5.0/3",     "UTC+1 CET - Paris"},
