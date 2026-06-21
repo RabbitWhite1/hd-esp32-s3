@@ -11,16 +11,24 @@
 #include <ArduinoJson.h>
 #include <math.h>
 
-static const int MAX_CITIES = 2;  // the weather band on the LCD fits two rows
+static const int MAX_CITIES = 16;   // how many cities may be configured
+static const int SHOWN_CITIES = 2;  // how many top rows the LCD shows + we fetch
 
 City cities[MAX_CITIES];
 static int cityCount = 0;
+static bool orderDirty = false;  // RAM order differs from the persisted one
 
 int weatherCityCount() {
   return cityCount;
 }
 int weatherMaxCities() {
   return MAX_CITIES;
+}
+int weatherShownMax() {
+  return SHOWN_CITIES;
+}
+bool weatherOrderDirty() {
+  return orderDirty;
 }
 const char *weatherCityName(int i) {
   if (i < 0 || i >= cityCount) return "";
@@ -44,7 +52,7 @@ static void initCity(City &c, const char *name, const char *label, float lat, fl
   c.wind = 0.0f;
 }
 
-static bool weatherSaveCities();  // defined below
+// weatherSaveCities() is declared in weather.h (public, used by the web reorder).
 
 static bool fetchWeather(City &c) {
   if (!wifiConnected()) return false;
@@ -79,7 +87,9 @@ static bool fetchWeather(City &c) {
 }
 
 void weatherUpdateAll() {
-  for (int i = 0; i < cityCount; i++) fetchWeather(cities[i]);
+  // Only the top SHOWN_CITIES are displayed on the LCD, so only those are fetched.
+  int n = cityCount < SHOWN_CITIES ? cityCount : SHOWN_CITIES;
+  for (int i = 0; i < n; i++) fetchWeather(cities[i]);
 }
 
 // Resolve a free-text place name to a canonical name + coordinates via
@@ -188,7 +198,8 @@ bool weatherAddCity(const String &query, String &resolvedOut) {
     resolvedOut = "could not save (SD card?)";
     return false;
   }
-  fetchWeather(cities[cityCount - 1]);  // populate the reading right away
+  if (cityCount - 1 < SHOWN_CITIES)
+    fetchWeather(cities[cityCount - 1]);  // populate right away only if it's a shown row
   resolvedOut = label + " (" + String(lat, 2) + ", " + String(lon, 2) + ")";
   logInfo("City added: %s -> %.2f,%.2f", nm.c_str(), lat, lon);
   return true;
@@ -203,11 +214,39 @@ bool weatherRemoveCity(int idx) {
   return ok;
 }
 
+// Reordering mirrors the Wi-Fi priority list: both move-to-top and drag-to-order
+// change RAM only and mark the order dirty; the web "Save order" button persists.
+bool weatherMoveCity(int idx, int dir) {
+  int j = idx + dir;
+  if (idx < 0 || idx >= cityCount || j < 0 || j >= cityCount) return false;
+  City tmp = cities[idx];
+  cities[idx] = cities[j];
+  cities[j] = tmp;
+  orderDirty = true;
+  return true;  // RAM only; caller persists via weatherSaveCities()
+}
+
+bool weatherApplyOrder(const int *order, int count) {
+  // order[] must be a permutation of 0..cityCount-1 (new position -> old index).
+  if (count != cityCount) return false;
+  bool seen[MAX_CITIES] = {false};
+  for (int i = 0; i < count; i++) {
+    int o = order[i];
+    if (o < 0 || o >= cityCount || seen[o]) return false;  // out of range or duplicate
+    seen[o] = true;
+  }
+  City reordered[MAX_CITIES];
+  for (int i = 0; i < count; i++) reordered[i] = cities[order[i]];
+  for (int i = 0; i < count; i++) cities[i] = reordered[i];
+  orderDirty = true;
+  return true;  // RAM only; caller persists via weatherSaveCities()
+}
+
 // Persisted as a "cities" JSON array in the shared config, one object per city
 // ({name, lat, lon, label}).
 static const char *CITIES_KEY = "cities";
 
-static bool weatherSaveCities() {
+bool weatherSaveCities() {
   JsonArray arr = configDoc()[CITIES_KEY].to<JsonArray>();  // replaces any existing array
   for (int i = 0; i < cityCount; i++) {
     JsonObject o = arr.add<JsonObject>();
@@ -217,8 +256,12 @@ static bool weatherSaveCities() {
     o["label"] = cities[i].label;
   }
   bool ok = configSave();
-  if (ok) logInfo("Cities saved to config (%d)", cityCount);
-  else logError("Cities save failed (SD card?)");
+  if (ok) {
+    logInfo("Cities saved to config (%d)", cityCount);
+    orderDirty = false;
+  } else {
+    logError("Cities save failed (SD card?)");
+  }
   return ok;
 }
 

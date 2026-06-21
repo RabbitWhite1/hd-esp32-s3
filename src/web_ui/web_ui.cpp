@@ -326,20 +326,39 @@ static void handleRoot() {
   html += "</div></form>";
   html += cardClose;
 
-  // Weather cities: add by name (geocoded to coordinates), remove, persisted in
-  // config (esp32.json). The forecast API uses the resolved lat/lon. One per row.
+  // Weather cities: add by name (geocoded to coordinates), remove, reorder by
+  // priority, persisted in config (esp32.json). Only the top weatherShownMax()
+  // are shown on the LCD + fetched. Reordering mirrors the Wi-Fi panel.
   html += cardOpen("weather", "Weather cities");
-  html += "<div class='row g-2 mb-3'>";
-  if (weatherCityCount() == 0) html += "<div class='col-12 text-muted'>(none)</div>";
+  html += "<div class='text-muted small mb-2'>Top ";
+  html += weatherShownMax();
+  html += " are shown on the device &mdash; drag to reorder</div>"
+          "<ul class='list-group mb-2' id='citylist'>";
+  if (weatherCityCount() == 0) html += "<li class='list-group-item text-muted'>(none)</li>";
   for (int i = 0; i < weatherCityCount(); i++) {
-    html += "<div class='col-12'><div class='border rounded p-2 d-flex justify-content-between align-items-center'>";
+    html += "<li class='list-group-item d-flex justify-content-between align-items-center' data-idx='";
+    html += i;
+    html += "'><span><span class='drag-handle me-2' style='cursor:grab' title='Drag to reorder'>"
+            "&#x2630;</span>";
     html += htmlEscape(weatherCityName(i));
-    html += "<form action='/weatherdel' method='POST' class='m-0'>"
+    html += "</span>"
+            "<form action='/weatheredit' method='POST' class='m-0 btn-group btn-group-sm'>"
             "<input type='hidden' name='idx' value='";
     html += i;
-    html += "'><button class='btn btn-sm btn-outline-danger'>Remove</button></form></div></div>";
+    html += "'>"
+            "<button class='btn btn-outline-secondary' name='act' value='top' "
+            "title='Move to top'>&#x2912;</button>"
+            "<button class='btn btn-outline-danger' name='act' value='del'>Remove</button>"
+            "</form></li>";
   }
-  html += "</div>";
+  html += "</ul>";
+  // Save order (drag/move-to-top change the browser/RAM only until this is clicked).
+  html += "<form id='citysaveform' action='/weatherorder' method='POST' class='mb-3'>"
+          "<input type='hidden' name='order' id='cityorderinput'>"
+          "<button id='citysavebtn' class='btn btn-sm ";
+  html += weatherOrderDirty() ? "btn-primary" : "btn-outline-secondary";
+  html += "'>Save order</button></form>";
+  html += "<hr>";  // separate the list/order section from adding a city
   if (weatherCityCount() < weatherMaxCities()) {
     html += "<form action='/weatheradd' method='POST' class='row g-2'>"
             "<div class='col'><input class='form-control' type='text' name='city' placeholder='e.g. Tokyo'></div>"
@@ -433,7 +452,7 @@ static void handleRoot() {
   for (int i = 0; i < wifiNetCount(); i++) {
     html += "<li class='list-group-item d-flex justify-content-between align-items-center' data-idx='";
     html += i;
-    html += "'><span><span class='wifi-handle me-2' style='cursor:grab' title='Drag to reorder'>"
+    html += "'><span><span class='drag-handle me-2' style='cursor:grab' title='Drag to reorder'>"
             "&#x2630;</span>";
     html += htmlEscape(wifiNetSSID(i));
     html += "</span>";
@@ -458,17 +477,17 @@ static void handleRoot() {
   html += wifiOrderDirty() ? "btn-primary" : "btn-outline-secondary";
   html += "'>Save order</button></form>";
   html += "<hr>";  // separate the saved-list/order section from adding a network
-  html += "<form action='/wifi' method='POST'>"
-          "<label class='form-label'>SSID</label>"
-          "<input type='text' class='form-control mb-2' name='ssid'>"
-          "<label class='form-label'>Password</label>"
-          "<input type='text' class='form-control mb-3' name='pass'>"
-          // 'Add' stores without testing; 'Test then Add' verifies the join first
-          // (which briefly drops the current link) and only saves on success.
-          "<div class='d-flex gap-2'>"
-          "<button class='btn btn-outline-primary' name='mode' value='store'>Add</button>"
-          "<button class='btn btn-primary' name='mode' value='test'>Test then Add</button>"
-          "</div></form>";
+  // SSID + password inputs and both add buttons on one row.
+  // 'Add' stores without testing; 'Test then Add' verifies the join first
+  // (which briefly drops the current link) and only saves on success.
+  html += "<form action='/wifi' method='POST' class='row g-2 align-items-end'>"
+          "<div class='col'><label class='form-label small mb-1'>SSID</label>"
+          "<input type='text' class='form-control' name='ssid'></div>"
+          "<div class='col'><label class='form-label small mb-1'>Password</label>"
+          "<input type='text' class='form-control' name='pass'></div>"
+          "<div class='col-auto'><button class='btn btn-outline-primary' name='mode' value='store'>Add</button></div>"
+          "<div class='col-auto'><button class='btn btn-primary' name='mode' value='test'>Test then Add</button></div>"
+          "</form>";
   html += cardClose;
 
   html += "</div></div></div>"  // /content col, /row, /#tab-config
@@ -594,25 +613,27 @@ static void handleRoot() {
           "if(window._thc)window._thc.destroy();if(window._thh)window._thh.destroy();"
           "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,tempRange(h.temp),'#dc3545','\\u00b0C',f,t,showDate);"
           "window._thh=buildChart('thchart_h','Humidity %',hm,{min:0,max:100},'#0d6efd','%',f,t,showDate);}"
-          // Make the Wi-Fi list drag-sortable; on drop, POST the new order (the
-          // data-idx values in their new DOM order) and refresh in place.
-          "function initSortable(){var el=document.getElementById('wifilist');"
+          // Make a reorderable list drag-sortable; dropping only rearranges the DOM
+          // and lights the Save button. Used for both Wi-Fi and weather lists.
+          "function makeSortable(listId,btnId){var el=document.getElementById(listId);"
           "if(!el||typeof Sortable==='undefined')return;"
-          "Sortable.create(el,{handle:'.wifi-handle',animation:150,onEnd:function(evt){"
+          "Sortable.create(el,{handle:'.drag-handle',animation:150,onEnd:function(evt){"
           "if(evt.oldIndex===evt.newIndex)return;"  // dropped back in place -> nothing changed
-          // Reorder lives in the DOM only; nothing is sent to the device until the
-          // user clicks 'Save order'. Light that button to flag unsaved changes.
-          "var b=document.getElementById('wifisavebtn');"
+          "var b=document.getElementById(btnId);"
           "if(b){b.classList.remove('btn-outline-secondary');b.classList.add('btn-primary');}}});}"
+          "function initSortable(){makeSortable('wifilist','wifisavebtn');makeSortable('citylist','citysavebtn');}"
+          // Fill a Save-order form's hidden field with its list's current DOM order.
+          "function fillOrder(listId,inputId){var wl=document.getElementById(listId);"
+          "var oi=document.getElementById(inputId);"
+          "if(wl&&oi)oi.value=[].map.call(wl.children,function(li){return li.getAttribute('data-idx');})"
+          ".filter(function(x){return x!==null;}).join(',');}"
           "document.addEventListener('submit',async function(ev){"
           "var f=ev.target;if((f.method||'').toLowerCase()!=='post')return;"
           "ev.preventDefault();"
           // Save order: capture the current drag order (data-idx in DOM order) so
           // the device applies + persists exactly what's shown.
-          "if(f.id==='wifisaveform'){var wl=document.getElementById('wifilist');"
-          "var oi=document.getElementById('wifiorderinput');"
-          "if(wl&&oi)oi.value=[].map.call(wl.children,function(li){return li.getAttribute('data-idx');})"
-          ".filter(function(x){return x!==null;}).join(',');}"
+          "if(f.id==='wifisaveform')fillOrder('wifilist','wifiorderinput');"
+          "if(f.id==='citysaveform')fillOrder('citylist','cityorderinput');"
           "var body=new URLSearchParams(new FormData(f));"
           "var s=ev.submitter;if(s&&s.name)body.append(s.name,s.value);"
           "busyOn();"
@@ -809,11 +830,55 @@ static void handleWeatherAdd() {
   respond(ok, ok ? ("Added: " + resolved) : ("Could not add '" + q + "': " + resolved));
 }
 
-static void handleWeatherDel() {
+// Per-row weather actions (mirrors handleWifiEdit): remove, or move-to-top (RAM
+// only -> user clicks Save order). A change to the top set re-fetches the shown
+// cities so the LCD reflects it.
+static void handleWeatherEdit() {
   int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
-  String name = weatherCityName(idx);  // capture before removal
-  bool ok = weatherRemoveCity(idx);
-  respond(ok, ok ? ("Removed: " + name) : "Remove failed (SD card?)");
+  String act = server.hasArg("act") ? server.arg("act") : "";
+  bool ok = true;
+  String msg = "";
+  if (act == "del") {
+    String name = weatherCityName(idx);  // capture before removal
+    ok = weatherRemoveCity(idx);
+    if (ok) weatherUpdateAll();  // top set may have shifted
+    msg = ok ? ("Removed: " + name) : "Remove failed (SD card?)";
+  } else if (act == "top") {
+    for (int k = idx; k > 0; k--) weatherMoveCity(k, -1);  // bubble up to index 0
+    if (idx > 0) msg = "Moved to top - click 'Save order' to keep it";
+  }
+  logInfo("Weather city edit via web: idx=%d act=%s", idx, act.c_str());
+  respond(ok, msg);
+}
+
+// "Save order" for weather cities (mirrors handleWifiSave): apply the drag order
+// if sent, persist, then re-fetch the (possibly new) top cities.
+static void handleWeatherOrder() {
+  String csv = server.hasArg("order") ? server.arg("order") : "";
+  csv.trim();
+  bool ok = true;
+  if (csv.length()) {
+    int order[16];  // matches MAX_CITIES in weather
+    int n = 0;
+    int start = 0;
+    while (start <= (int)csv.length() && n < 16) {
+      int comma = csv.indexOf(',', start);
+      String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+      tok.trim();
+      if (tok.length()) order[n++] = tok.toInt();
+      if (comma < 0) break;
+      start = comma + 1;
+    }
+    ok = weatherApplyOrder(order, n);
+  }
+  if (!ok) {
+    respond(false, "Reorder failed");
+    return;
+  }
+  bool saved = weatherSaveCities();
+  if (saved) weatherUpdateAll();  // new top set -> refresh shown cities
+  logInfo("Weather order save via web: %s", saved ? "ok" : "failed");
+  respond(saved, saved ? "Priority order saved" : "Save failed (SD card?)");
 }
 
 static void handleIntervals() {
@@ -962,7 +1027,8 @@ void webBegin() {
   server.on("/tz", HTTP_POST, handleTz);
   server.on("/intervals", HTTP_POST, handleIntervals);
   server.on("/weatheradd", HTTP_POST, handleWeatherAdd);
-  server.on("/weatherdel", HTTP_POST, handleWeatherDel);
+  server.on("/weatheredit", HTTP_POST, handleWeatherEdit);
+  server.on("/weatherorder", HTTP_POST, handleWeatherOrder);
   // Serve the cached third-party assets (Bootstrap) from SD for offline use.
   for (int i = 0; i < assetCount(); i++)
     server.on(assetAt(i)->route, HTTP_GET, handleAsset);

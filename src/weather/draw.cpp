@@ -121,7 +121,7 @@ void drawWeatherRow(int x, int y, int w, const City &c) {
   int barH = 7;
   int barX = lowX + 16;
   int barY = base - barH;
-  int barW = highX - 4 - barX;
+  int barW = highX - 14 - barX;  // wider right gap keeps the gauge a bit shorter
   if (barW < 8) barW = 8;
   u8g2->drawRFrame(barX, barY, barW, barH, barH / 2);
 

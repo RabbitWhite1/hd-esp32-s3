@@ -19,12 +19,20 @@ struct City {
 
 extern City cities[];          // valid for indices [0, weatherCityCount())
 int weatherCityCount();        // number of configured cities
-int weatherMaxCities();        // capacity (the LCD weather band fits this many rows)
+int weatherMaxCities();        // capacity (how many cities may be configured)
+int weatherShownMax();         // how many top cities the LCD shows + we fetch (2)
 const char *weatherCityName(int i);  // full "City, Region, Country" label of city i ("" if out of range)
 
-void weatherUpdateAll();  // refresh every city; a city keeps its old fields on failure
+void weatherUpdateAll();  // refresh the top weatherShownMax() cities (a city keeps its old fields on failure)
 
 // City configuration (geocode a name -> coordinates, persisted in config).
 void weatherLoadCities();   // restore from config, or seed defaults (call after configBegin)
 bool weatherAddCity(const String &query, String &resolvedOut);  // geocode + append + persist; resolvedOut gets a human-readable result/error
 bool weatherRemoveCity(int idx);  // remove city idx + persist
+bool weatherSaveCities();   // re-write the city list to config; false on write failure
+
+// Priority ordering (top weatherShownMax() are shown/fetched), mirroring Wi-Fi:
+// move/apply change RAM only + mark dirty; persist with weatherSaveCities().
+bool weatherMoveCity(int idx, int dir);          // swap city idx with its neighbor (dir -1/+1)
+bool weatherApplyOrder(const int *order, int count);  // reorder to a permutation (new pos -> old index)
+bool weatherOrderDirty();                        // true while the RAM order isn't persisted yet

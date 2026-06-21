@@ -243,7 +243,8 @@ void drawOverview(int mx, int lineW) {
   // Weather: one horizontal temperature-gauge row per city, started higher and
   // spaced wider to fill the larger band down to the y=172 divider.
   int wy = 90;
-  for (int i = 0; i < weatherCityCount(); i++) {
+  int shown = weatherCityCount() < weatherShownMax() ? weatherCityCount() : weatherShownMax();
+  for (int i = 0; i < shown; i++) {
     drawWeatherRow(mx, wy, 172, cities[i]);
     wy += 36;
   }
