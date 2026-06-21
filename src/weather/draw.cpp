@@ -97,32 +97,40 @@ static void drawWeatherIcon(int x, int y, int code, float wind) {
 // <current> value floating just above the fill tip and a condition icon at the right.
 void drawWeatherRow(int x, int y, int w, const City &c) {
   int base = y + 21;  // baseline for the city/low/high text and the bar's bottom
-  u8g2->setFont(u8g2_font_6x10_tf);  // city name a bit larger than the values
-  u8g2->drawStr(x, base, c.name);
-  u8g2->setFont(u8g2_font_5x7_tf);   // low/high/current values + bar stay small
 
+  // Right-pack the readout (icon | high | gauge | low) into a compact cluster, so
+  // the city name gets the rest of the row on the left.
+  int iconSz = 16;
+  int iconX = x + w - iconSz;
+  int highX = iconX - 16;          // <high> sits just left of the icon
+  int gaugeW = 30;                 // compact gauge
+  int barX = highX - 3 - gaugeW;   // gauge ends a few px before <high>
+  int lowX = barX - 18;            // <low> sits just left of the gauge
+
+  // City name fills the space left of <low>, truncated so it never overruns it.
+  u8g2->setFont(u8g2_font_6x10_tf);  // city name a bit larger than the values
+  int maxChars = (lowX - 4 - x) / 6;  // 6x10 is 6 px/char
+  if (maxChars < 1) maxChars = 1;
+  char nm[28];
+  if (maxChars > (int)sizeof(nm) - 1) maxChars = sizeof(nm) - 1;
+  snprintf(nm, sizeof(nm), "%.*s", maxChars, c.name);
+  u8g2->drawStr(x, base, nm);
+
+  u8g2->setFont(u8g2_font_5x7_tf);   // low/high/current values + bar stay small
   if (!c.ok) {
-    u8g2->drawStr(x + 68, base, "--");
+    u8g2->drawStr(lowX, base, "--");
     return;
   }
 
   char s[8];
-  int lowX = x + 68;  // extra gap between the city name and the gauge
   snprintf(s, sizeof(s), "%.0f", c.lo);
   u8g2->drawStr(lowX, base, s);
-
-  // Reserve the right end of the row for the condition icon; the bar is shortened to fit.
-  int iconSz = 16;
-  int iconX = x + w - iconSz;
-  int highX = iconX - 16;  // <high> sits just left of the icon
   snprintf(s, sizeof(s), "%.0f", c.hi);
   u8g2->drawStr(highX, base, s);
 
   int barH = 7;
-  int barX = lowX + 16;
   int barY = base - barH;
-  int barW = highX - 14 - barX;  // wider right gap keeps the gauge a bit shorter
-  if (barW < 8) barW = 8;
+  int barW = gaugeW;
   u8g2->drawRFrame(barX, barY, barW, barH, barH / 2);
 
   // Fill from the left edge to where <current> falls between <low> and <high>.
@@ -133,11 +141,11 @@ void drawWeatherRow(int x, int y, int w, const City &c) {
   int fillW = (int)(frac * (barW - 2));
   if (fillW > 0) u8g2->drawBox(barX + 1, barY + 1, fillW, barH - 2);
 
-  // <current> centered just above the fill tip, kept left of <high>.
+  // <current> centered just above the fill tip, kept within the gauge span.
   snprintf(s, sizeof(s), "%.0f", c.cur);
   int tw = (int)strlen(s) * 5;
   int curX = barX + 1 + fillW - tw / 2;
-  if (curX < x) curX = x;
+  if (curX < barX) curX = barX;
   if (curX + tw > highX) curX = highX - tw;
   u8g2->drawStr(curX, barY - 2, s);
 
