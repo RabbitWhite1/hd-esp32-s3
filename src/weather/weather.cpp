@@ -227,11 +227,11 @@ void weatherLoadCities() {
     if (nm[0] && !isnan(lat) && !isnan(lon)) initCity(cities[cityCount++], nm, label, lat, lon);
   }
   if (cityCount == 0) {
-    // Seed the original defaults so a fresh device still shows weather.
-    initCity(cities[cityCount++], "Sunnyvale", "Sunnyvale, California, United States", 37.37f, -122.04f);
-    if (cityCount < MAX_CITIES)
-      initCity(cities[cityCount++], "New York", "New York, New York, United States", 40.71f, -74.01f);
-    logInfo("Cities: seeded defaults (%d)", cityCount);
+    // No cities configured: seed the single default so a fresh device still shows
+    // weather. On a freshly created config file, write it through to esp32.json.
+    initCity(cities[cityCount++], "New York", "New York, New York, United States", 40.71f, -74.01f);
+    if (configWasCreated()) weatherSaveCities();
+    logInfo("Cities: seeded default (%d)", cityCount);
   } else {
     logInfo("Cities loaded from config (%d)", cityCount);
   }

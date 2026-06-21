@@ -392,7 +392,7 @@ void setup() {
   // card is prepared, otherwise the persisted settings + Wi-Fi list are erased
   // each boot. The line after it re-seeds a network so the freshly wiped card
   // isn't left empty; harmless to keep (or remove together).
-  // sdFormat();
+  sdFormat();
   // ===========================================================================
 
   // Settings that come from config (esp32.json) need configBegin() first (done above).

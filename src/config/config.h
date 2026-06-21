@@ -11,7 +11,8 @@
 // Claude credentials, the weather-city list, ...). Load once at boot with
 // configBegin(); get/set operate on an in-RAM JsonDocument and only touch the
 // card on configSave(). Feature modules own their own key names + defaults.
-void configBegin();  // load the store from SD (call after sdBegin)
+void configBegin();      // load the store from SD (call after sdBegin)
+bool configWasCreated();  // true when configBegin found no existing file -> modules should seed + save their defaults
 
 String configGet(const char *key, const String &def = "");  // value, or def if the key is absent
 long configGetInt(const char *key, long def);               // value parsed as an int, or def if absent

@@ -40,9 +40,10 @@ static const Zone ZONES[] = {
 };
 static const int ZONE_COUNT = sizeof(ZONES) / sizeof(ZONES[0]);
 
-// Defaults mirror the original hardcoded PST primary / EST secondary.
-static const int DEFAULT_PRIMARY = 2;    // PST - Los Angeles
-static const int DEFAULT_SECONDARY = 6;  // EST - New York
+// Defaults: New York (EST/EDT) primary, Los Angeles secondary. Written into a
+// freshly created esp32.json by timeLoadZones().
+static const int DEFAULT_PRIMARY = 6;    // EST/EDT - New York
+static const int DEFAULT_SECONDARY = 2;  // PST/PDT - Los Angeles
 
 static int g_primary = DEFAULT_PRIMARY;
 static int g_secondary = DEFAULT_SECONDARY;
@@ -134,5 +135,6 @@ void timeLoadZones() {
   if (pi >= 0) g_primary = pi;
   if (ei >= 0) g_secondary = ei;
   applyPrimaryEnv();
+  if (configWasCreated()) timeSaveZones();  // write the defaults into the fresh json
   logInfo("Time zones loaded from config (%s / %s)", ZONES[g_primary].label, ZONES[g_secondary].label);
 }

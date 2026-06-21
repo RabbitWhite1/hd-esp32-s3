@@ -11,6 +11,7 @@ static const char *CONF_FILE = "esp32.json";
 // Keys passed to get/set must be string literals with program-long lifetime
 // (ArduinoJson links, not copies, const char* keys) - all callers use statics.
 static JsonDocument doc;
+static bool created = false;  // true when no config file existed at boot
 
 static int keyCount() {
   return doc.is<JsonObject>() ? (int)doc.as<JsonObject>().size() : 0;
@@ -19,6 +20,7 @@ static int keyCount() {
 void configBegin() {
   doc.clear();
   String data = sdReadText(CONF_FILE);
+  created = (data.length() == 0);  // absent/empty -> a fresh store; modules seed defaults
   if (data.length()) {
     DeserializationError err = deserializeJson(doc, data);
     if (err) {
@@ -28,7 +30,11 @@ void configBegin() {
       doc.clear();
     }
   }
-  logInfo("Config loaded from SD (%d keys)", keyCount());
+  logInfo("Config loaded from SD (%d keys, %s)", keyCount(), created ? "new" : "existing");
+}
+
+bool configWasCreated() {
+  return created;
 }
 
 String configGet(const char *key, const String &def) {
