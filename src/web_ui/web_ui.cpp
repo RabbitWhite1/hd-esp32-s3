@@ -12,7 +12,7 @@
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../time_sync/time_sync.h"        // select primary/secondary time zones from the form
 #include "../logging/logging.h"
-#include "favicon.h"                       // embedded 32x32 PNG favicon
+#include "favicon.h"                       // embedded 32x32 ICO favicon
 #include <WebServer.h>
 #include <time.h>
 
@@ -154,7 +154,7 @@ static void handleSetup() {
   String h =
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<link rel='icon' type='image/png' href='/favicon.ico'>"
+    "<link rel='icon' type='image/x-icon' href='/favicon.ico'>"
     "<title>Wi-Fi setup</title><style>"
     "body{font-family:system-ui,Arial,sans-serif;max-width:24rem;margin:2rem auto;padding:0 1rem;color:#222}"
     "h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem;font-weight:600}"
@@ -195,7 +195,7 @@ static void handleRoot() {
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>hd panel</title>"
-    "<link rel='icon' type='image/png' href='/favicon.ico'>";
+    "<link rel='icon' type='image/x-icon' href='/favicon.ico'>";
   html += cssLink("/bootstrap.css");
   html +=
     "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:7rem}"
@@ -827,7 +827,7 @@ static void handleAsset() {
 
 static void handleFavicon() {
   server.sendHeader("Cache-Control", "max-age=604800");  // browser may cache it a week
-  server.send_P(200, "image/png", (const char *)favicon_png, favicon_png_len);
+  server.send_P(200, "image/x-icon", (const char *)favicon_ico, favicon_ico_len);
 }
 
 static void handleWeatherAdd() {
