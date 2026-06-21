@@ -17,6 +17,8 @@ static const CachedAsset ASSETS[] = {
    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js", "application/javascript"},
   {"/sortable.js", "sortable.js",
    "https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js", "application/javascript"},
+  {"/chart.js", "chart.js",
+   "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js", "application/javascript"},
 };
 static const int ASSET_COUNT = sizeof(ASSETS) / sizeof(ASSETS[0]);
 
@@ -33,19 +35,29 @@ const CachedAsset *assetByRoute(const char *route) {
   return nullptr;
 }
 
-bool assetIsCached(const CachedAsset &a) {
-  String p = sdPath(a.file);
-  if (p.length() == 0) return false;
-  struct stat st;
-  return stat(p.c_str(), &st) == 0 && st.st_size > 0;
+// A cached asset is only usable if its first byte looks like text (JS/CSS), not
+// a gzip stream (0x1f) or an HTML/XML error page ('<') — guards against a copy
+// that got saved compressed or as an error body.
+static bool fileLooksValid(const String &p) {
+  FILE *f = fopen(p.c_str(), "rb");
+  if (!f) return false;
+  int c = fgetc(f);
+  fclose(f);
+  return c != EOF && c != 0x1f && c != '<';
 }
 
-// True if the asset is absent or older than the TTL (and we know the time).
+bool assetIsCached(const CachedAsset &a) {
+  String p = sdPath(a.file);
+  return p.length() && fileLooksValid(p);
+}
+
+// True if the asset is absent, corrupt, or older than the TTL (when time known).
 static bool needsRefresh(const CachedAsset &a) {
   String p = sdPath(a.file);
-  if (p.length() == 0) return false;  // no SD card -> nothing to cache
+  if (p.length() == 0) return false;     // no SD card -> nothing to cache
+  if (!fileLooksValid(p)) return true;   // missing/empty/corrupt -> re-fetch
   struct stat st;
-  if (stat(p.c_str(), &st) != 0 || st.st_size == 0) return true;  // missing/empty
+  if (stat(p.c_str(), &st) != 0) return true;
   time_t now = time(nullptr);
   if (now < 1700000000) return false;  // clock not synced -> don't churn the cache
   return (now - st.st_mtime) > ASSET_TTL_SEC;
@@ -62,6 +74,8 @@ static bool downloadAsset(const CachedAsset &a) {
   client.setInsecure();
   HTTPClient http;
   if (!http.begin(client, a.url)) return false;
+  http.setTimeout(8000);  // per-read socket timeout
+  http.addHeader("Accept-Encoding", "identity");  // never let the CDN gzip the body
   int code = http.GET();  // redirect-following is on by default
   if (code != 200) {
     logError("Asset %s: HTTP %d", a.file, code);
@@ -78,6 +92,8 @@ static bool downloadAsset(const CachedAsset &a) {
   WiFiClient *stream = http.getStreamPtr();
   uint8_t buf[1024];
   size_t total = 0;
+  // Bounded loop: never block boot forever if the connection stalls.
+  unsigned long lastData = millis(), startMs = millis();
   while (http.connected() && (len < 0 || total < (size_t)len)) {
     size_t avail = stream->available();
     if (avail) {
@@ -85,8 +101,11 @@ static bool downloadAsset(const CachedAsset &a) {
       if (n <= 0) break;
       fwrite(buf, 1, n, f);
       total += n;
+      lastData = millis();
     } else {
-      delay(1);
+      if (millis() - lastData > 8000) break;    // 8 s with no new data -> give up
+      if (millis() - startMs > 45000) break;     // 45 s overall cap
+      delay(5);
     }
   }
   fclose(f);
@@ -94,6 +113,11 @@ static bool downloadAsset(const CachedAsset &a) {
 
   if (total == 0 || (len > 0 && total != (size_t)len)) {
     logWarn("Asset %s: incomplete (%u/%d)", a.file, (unsigned)total, len);
+    remove(tmp.c_str());
+    return false;
+  }
+  if (!fileLooksValid(tmp)) {  // gzip/HTML body slipped through -> don't cache it
+    logWarn("Asset %s: content not valid text, discarding", a.file);
     remove(tmp.c_str());
     return false;
   }

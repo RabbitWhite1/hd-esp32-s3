@@ -1,5 +1,4 @@
 #include "battery.h"
-#include "../logging/logging.h"
 #include <Arduino.h>
 #include <math.h>
 
@@ -65,8 +64,6 @@ void batteryUpdate() {
   // so refresh it only while running on the battery. It is also seeded once on
   // the first sample so a device booted already-charging still shows something.
   if (!charging || percent < 0) percent = voltageToPercent(voltage);
-
-  logDebug("Battery: %.2f V (%d%%)%s", voltage, percent, charging ? " charging" : "");
 }
 
 void batteryBegin() {
