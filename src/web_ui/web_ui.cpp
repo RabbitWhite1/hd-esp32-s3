@@ -445,7 +445,12 @@ static void handleRoot() {
           "<input type='text' class='form-control mb-2' name='ssid'>"
           "<label class='form-label'>Password</label>"
           "<input type='text' class='form-control mb-3' name='pass'>"
-          "<button class='btn btn-primary'>Add (tests before saving)</button></form>";
+          // 'Add' stores without testing; 'Test then Add' verifies the join first
+          // (which briefly drops the current link) and only saves on success.
+          "<div class='d-flex gap-2'>"
+          "<button class='btn btn-outline-primary' name='mode' value='store'>Add</button>"
+          "<button class='btn btn-primary' name='mode' value='test'>Test then Add</button>"
+          "</div></form>";
   html += cardClose;
 
   html += "</div></div></div>";  // /content col, /row, /#app
@@ -606,10 +611,13 @@ static void handleWifi() {
   // Plain-page setup flow = phone on the SoftAP submitting the minimal page (no
   // AJAX). Capture it BEFORE the join, since a success schedules the AP teardown.
   bool setupFlow = wifiInSetupMode() && !server.hasHeader("X-Requested-With");
+  // "store" = save without testing; anything else (default) tests the join first.
+  // The setup flow must actually connect, so force a test there.
+  bool test = setupFlow || (server.arg("mode") != "store");
   // Note: testing a new network drops the current link, so this HTTP response
   // may not reach the browser; reconnect via http://esp32.local/ afterwards.
-  bool ok = wifiAddNetwork(s, p);
-  logInfo("WiFi add via web: %s -> %s", s.c_str(), ok ? "saved" : "rejected");
+  bool ok = test ? wifiAddNetwork(s, p) : wifiStoreNetwork(s, p);
+  logInfo("WiFi %s via web: %s -> %s", test ? "test+add" : "add", s.c_str(), ok ? "saved" : "rejected");
   if (setupFlow) {
     // Minimal result page. On success the AP is mid-teardown (scheduled with a
     // grace period), so this reply is the last thing the phone gets over it.
@@ -636,7 +644,10 @@ static void handleWifi() {
     server.send(200, "text/html", h);
     return;
   }
-  respond(ok, ok ? ("Connected & saved: " + s) : ("Could not connect to '" + s + "' - not saved"));
+  if (test)
+    respond(ok, ok ? ("Connected & saved: " + s) : ("Could not connect to '" + s + "' - not saved"));
+  else
+    respond(ok, ok ? ("Saved (not tested): " + s) : "SSID required");
 }
 
 static void handleWifiEdit() {
