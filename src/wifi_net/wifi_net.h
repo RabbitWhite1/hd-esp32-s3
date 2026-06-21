@@ -49,7 +49,8 @@ const char *wifiNetSSID(int i);  // i-th saved SSID ("" if out of range)
 // is successfully joined, so it is only ever up while no saved network works.
 void wifiStartSetupAP();         // bring up the setup AP (idempotent; no-op if already up)
 bool wifiInSetupMode();          // true while the setup AP is up (no STA network joined)
-const char *wifiSetupApSsid();   // the open AP's SSID (e.g. "h4d-setup")
+const char *wifiSetupApSsid();   // the open AP's SSID (e.g. "h4d-esp32-setup")
+String wifiSetupApIp();          // the AP's IP as a string ("" when not in setup mode)
 void wifiRequestStopAP(uint32_t delayMs);  // schedule AP teardown after delayMs (lets a final HTTP reply flush)
 void wifiLoop();                 // call often from loop(): performs any pending AP teardown
 // Synchronous scan of nearby networks for the setup page's pick-list. wifiScan()

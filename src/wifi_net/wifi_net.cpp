@@ -3,6 +3,7 @@
 #include "../logging/logging.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <DNSServer.h>
 
 // No Wi-Fi network is baked into the firmware; the device connects only to its
 // saved networks (loaded from the SD card / added via the web UI).
@@ -47,15 +48,23 @@ static void startMdns() {
 // Open AP brought up only when no saved network can be joined, so a phone can
 // connect and configure Wi-Fi. WIFI_AP_STA keeps the station side alive while the
 // AP is up, so we can still scan and test-connect candidate networks.
-static const char *AP_SSID = "h4d-setup";
+static const char *AP_SSID = "h4d-esp32-setup";
 static bool apMode = false;       // true while the setup AP is up
 static uint32_t apStopAt = 0;     // when !=0, tear the AP down at this millis() (deferred so a reply can flush)
+// Captive-portal DNS: while the AP is up this resolves EVERY hostname to our own
+// IP, so the phone's connectivity probe lands on us and the OS auto-opens the
+// "Sign in to network" sheet on the setup page.
+static DNSServer dnsServer;
+static IPAddress apIp;
 
 bool wifiInSetupMode() {
   return apMode;
 }
 const char *wifiSetupApSsid() {
   return AP_SSID;
+}
+String wifiSetupApIp() {
+  return apMode ? apIp.toString() : String("");
 }
 
 void wifiStartSetupAP() {
@@ -64,17 +73,20 @@ void wifiStartSetupAP() {
   bool ok = WiFi.softAP(AP_SSID);  // open network (no password) for easy first join
   apMode = true;
   apStopAt = 0;
-  IPAddress ip = WiFi.softAPIP();
+  apIp = WiFi.softAPIP();
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(53, "*", apIp);  // catch-all: every lookup -> us (captive portal)
   if (ok)
-    logInfo("WiFi setup AP up: join '%s', then open http://%s/", AP_SSID, ip.toString().c_str());
+    logInfo("WiFi setup AP up: join '%s', then open http://%s/", AP_SSID, apIp.toString().c_str());
   else
     logError("WiFi setup AP failed to start");
   // Surface it on the LCD footer (rendered via wifiStatus()).
-  setStatus(String("Setup: join '") + AP_SSID + "' -> " + ip.toString());
+  setStatus(String("Setup: join '") + AP_SSID + "' -> " + apIp.toString());
 }
 
 static void stopSetupAP() {
   if (!apMode) return;
+  dnsServer.stop();
   WiFi.softAPdisconnect(true);  // stop broadcasting + free the AP
   WiFi.mode(WIFI_STA);
   apMode = false;
@@ -87,6 +99,7 @@ void wifiRequestStopAP(uint32_t delayMs) {
 }
 
 void wifiLoop() {
+  if (apMode) dnsServer.processNextRequest();  // answer captive-portal lookups
   // Deferred AP teardown: once we've joined a real network we keep the AP up for
   // a short grace period so the setup page's "Connected" reply can reach the phone.
   if (apStopAt && (int32_t)(millis() - apStopAt) >= 0) {
