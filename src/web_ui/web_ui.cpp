@@ -309,12 +309,12 @@ static void handleRoot() {
   html += cardClose;
 
   // Weather cities: add by name (geocoded to coordinates), remove, persisted to
-  // /sdcard/cities.txt. The forecast API uses the resolved lat/lon. Shown 2 per row.
+  // /sdcard/cities.txt. The forecast API uses the resolved lat/lon. One per row.
   html += cardOpen("weather", "Weather cities");
   html += "<div class='row g-2 mb-3'>";
   if (weatherCityCount() == 0) html += "<div class='col-12 text-muted'>(none)</div>";
   for (int i = 0; i < weatherCityCount(); i++) {
-    html += "<div class='col-6'><div class='border rounded p-2 d-flex justify-content-between align-items-center'>";
+    html += "<div class='col-12'><div class='border rounded p-2 d-flex justify-content-between align-items-center'>";
     html += htmlEscape(weatherCityName(i));
     html += "<form action='/weatherdel' method='POST' class='m-0'>"
             "<input type='hidden' name='idx' value='";
