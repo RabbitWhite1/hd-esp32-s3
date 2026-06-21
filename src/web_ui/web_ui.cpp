@@ -144,7 +144,51 @@ static String jsScript(const char *route, const char *glob) {
          "\"><\\/script>')</script>";
 }
 
+// Minimal, dependency-free page served at "/" while the device is in SoftAP
+// setup mode (no saved network reachable, so no internet to load Bootstrap). A
+// phone joins the open setup AP, picks a scanned network (or types one), enters
+// the password, and submits to /wifi — which tests + saves it, then drops the AP.
+static void handleSetup() {
+  int n = wifiScan();  // blocks a couple seconds; fine for a one-off setup page
+  String h =
+    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Wi-Fi setup</title><style>"
+    "body{font-family:system-ui,Arial,sans-serif;max-width:24rem;margin:2rem auto;padding:0 1rem;color:#222}"
+    "h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem;font-weight:600}"
+    "input,button{width:100%;box-sizing:border-box;padding:.55rem;font-size:1rem;border:1px solid #bbb;border-radius:.375rem}"
+    "button{margin-top:1.25rem;background:#0d6efd;color:#fff;border:0;font-weight:600}"
+    ".muted{color:#666;font-size:.85rem}a{color:#0d6efd}"
+    "</style></head><body>"
+    "<h1>Wi-Fi setup</h1>"
+    "<p class='muted'>Choose your network and enter its password. The device tests "
+    "the connection and saves it only if it works, then leaves this hotspot.</p>"
+    "<form method='POST' action='/wifi'>"
+    "<label>Network</label>"
+    "<input name='ssid' list='nets' placeholder='Network name' autocomplete='off'>"
+    "<datalist id='nets'>";
+  for (int i = 0; i < n; i++) {
+    h += "<option value='";
+    h += htmlEscape(wifiScanSSID(i));
+    h += "'>";
+  }
+  h += "</datalist>"
+       "<label>Password</label>"
+       "<input name='pass' placeholder='Password'>"
+       "<button type='submit'>Connect</button>"
+       "</form>"
+       "<p class='muted' style='margin-top:1.5rem'>";
+  h += n;
+  h += " network(s) found &middot; <a href='/'>rescan</a></p>"
+       "</body></html>";
+  server.send(200, "text/html", h);
+}
+
 static void handleRoot() {
+  if (wifiInSetupMode()) {  // no saved network joined: show the minimal setup page
+    handleSetup();
+    return;
+  }
   String html =
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -492,10 +536,39 @@ static void handleRoot() {
 static void handleWifi() {
   String s = server.hasArg("ssid") ? server.arg("ssid") : "";
   String p = server.hasArg("pass") ? server.arg("pass") : "";
+  // Plain-page setup flow = phone on the SoftAP submitting the minimal page (no
+  // AJAX). Capture it BEFORE the join, since a success schedules the AP teardown.
+  bool setupFlow = wifiInSetupMode() && !server.hasHeader("X-Requested-With");
   // Note: testing a new network drops the current link, so this HTTP response
   // may not reach the browser; reconnect via http://esp32.local/ afterwards.
   bool ok = wifiAddNetwork(s, p);
   logInfo("WiFi add via web: %s -> %s", s.c_str(), ok ? "saved" : "rejected");
+  if (setupFlow) {
+    // Minimal result page. On success the AP is mid-teardown (scheduled with a
+    // grace period), so this reply is the last thing the phone gets over it.
+    String h =
+      "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Wi-Fi setup</title><style>"
+      "body{font-family:system-ui,Arial,sans-serif;max-width:24rem;margin:2rem auto;padding:0 1rem;color:#222}"
+      "a{color:#0d6efd}</style></head><body>";
+    if (ok) {
+      h += "<h1>Connected</h1><p>The device joined <b>";
+      h += htmlEscape(s);
+      h += "</b> and saved it. It is now on your network &mdash; you can disconnect from the <b>";
+      h += htmlEscape(wifiSetupApSsid());
+      h += "</b> hotspot. The panel is at <b>http://";
+      h += wifiHostname();
+      h += ".local/</b>.</p>";
+    } else {
+      h += "<h1>Couldn&#39;t connect</h1><p>Could not join <b>";
+      h += htmlEscape(s);
+      h += "</b>. Check the password and <a href='/'>try again</a>.</p>";
+    }
+    h += "</body></html>";
+    server.send(200, "text/html", h);
+    return;
+  }
   respond(ok, ok ? ("Connected & saved: " + s) : ("Could not connect to '" + s + "' - not saved"));
 }
 
@@ -769,7 +842,18 @@ void webBegin() {
   server.on("/wifiedit", HTTP_POST, handleWifiEdit);
   server.on("/wifisave", HTTP_POST, handleWifiSave);
   server.on("/wifiorder", HTTP_POST, handleWifiOrder);
-  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.onNotFound([]() {
+    // Captive portal: while the setup AP is up, the OS connectivity probes
+    // (Android /generate_204, iOS /hotspot-detect.html, Windows /connecttest.txt,
+    // ...) land here via the catch-all DNS. Redirect them to the setup page so the
+    // phone auto-opens the "Sign in to network" sheet.
+    if (wifiInSetupMode()) {
+      server.sendHeader("Location", "http://" + wifiSetupApIp() + "/");
+      server.send(302, "text/plain", "");
+      return;
+    }
+    server.send(404, "text/plain", "Not found");
+  });
   server.begin();
   logInfo("Web UI listening on port 80");
 }

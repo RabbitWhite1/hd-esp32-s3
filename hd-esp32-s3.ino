@@ -65,6 +65,10 @@ String lastSavedClaude = "";
 int keyPrev = HIGH;
 unsigned long keyLastChange = 0;
 
+// Tracks the Wi-Fi link so loop() can auto-refresh on the disconnected->connected
+// edge. Seeded at the end of setup() so a boot-time connection doesn't re-refresh.
+bool wifiWasConnected = false;
+
 // Screen views, cycled by the BOOT button.
 enum View { VIEW_OVERVIEW = 0, VIEW_GDOC, VIEW_TODO, VIEW_COUNT };
 int currentView = VIEW_OVERVIEW;
@@ -448,11 +452,36 @@ void setup() {
   drawScreen();
 
   playChimeLong();  // boot updates done
+  wifiWasConnected = wifiConnected();  // seed the edge detector; boot already refreshed
+}
+
+// Force-refresh every network feed (weather, Claude usage, Google Doc), reset the
+// periodic timers so the next auto-refresh is a full interval away, and redraw.
+// Shared by the KEY button and the on-(re)connect trigger in loop().
+void refreshAll() {
+  weatherUpdateAll();
+  claudeUsageUpdate();
+  gdocUpdate();
+  lastWeather = millis();
+  lastClaudeUsage = millis();
+  lastGdoc = millis();
+  drawScreen();  // show the freshly fetched data
 }
 
 void loop() {
   wifiEnsureConnected();
+  wifiLoop();   // tear down the first-time setup AP once a real network is joined
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
+
+  // Auto-refresh on the disconnected->connected edge (e.g. just after first-time
+  // setup), exactly like a KEY press, so the screen fills in as soon as we're online.
+  bool wifiNow = wifiConnected();
+  if (wifiNow && !wifiWasConnected) {
+    logInfo("WiFi connected -> auto refresh");
+    refreshAll();
+    playChimeLong();  // updates done
+  }
+  wifiWasConnected = wifiNow;
 
   // KEY button: debounce; on press (HIGH->LOW) chime + force-refresh weather/Claude usage
   int k = digitalRead(KEY_PIN);
@@ -460,15 +489,9 @@ void loop() {
     keyLastChange = millis();
     if (k == LOW) {
       logInfo("KEY pressed -> chime + refresh");
-      playChimeShort();            // immediate press feedback
-      weatherUpdateAll();
-      claudeUsageUpdate();
-      gdocUpdate();
-      lastWeather = millis();      // reset the periodic timers so the next auto-refresh is a full interval away
-      lastClaudeUsage = millis();
-      lastGdoc = millis();
-      drawScreen();                // show the freshly fetched data
-      playChimeLong();             // updates done
+      playChimeShort();  // immediate press feedback
+      refreshAll();
+      playChimeLong();   // updates done
     }
     keyPrev = k;
   }
