@@ -18,6 +18,7 @@
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 #include "src/config/config.h"               // configBegin — small persistent key/value settings (esp32.conf)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
+#include "src/history/history.h"             // historyAdd — temp/humidity ring buffer + CSV logging
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -42,10 +43,12 @@ U8G2 *u8g2 = nullptr;
 
 const unsigned long SAMPLE_INTERVAL = 10 * 1000;
 const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
+const unsigned long HISTORY_INTERVAL = 60UL * 1000;            // append one temp/humidity sample to the yearly CSV per minute
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
 // Claude-usage and Google-Doc refresh intervals are user-configurable (minutes)
 // and live in esp32.conf — see claudeUsageIntervalMin() / gdocIntervalMin().
 unsigned long lastSample = 0;
+unsigned long lastHistory = 0;
 unsigned long lastWeather = 0;
 unsigned long lastClaudeUsage = 0;
 unsigned long lastGdoc = 0;
@@ -397,7 +400,8 @@ void setup() {
   // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
   // connecting, so wifiBegin() can try the saved networks.
   sdBegin();
-  configBegin();  // load small persistent settings (esp32.conf) before features read them
+  configBegin();   // load small persistent settings (esp32.conf) before features read them
+  historyBegin();  // ensure /sdcard/sensor_data exists for the temp/humidity logs
 
   // ============================ ONE-TIME SD FORMAT ============================
   // Wipes the card to a fresh FAT filesystem on EVERY boot — here only to prepare
@@ -419,14 +423,20 @@ void setup() {
   wifiSetRedrawHook(drawScreen);  // let wifiBegin() show "Trying <ssid>" on the footer
   wifiBegin();
   timeBegin();
-  assetsEnsureFresh();  // refresh the cached web-UI assets (Bootstrap) if stale + online
+  drawScreen();
+
+  // Start the LAN server FIRST, before the slow/hang-prone network fetches below
+  // (asset cache, weather, Claude, gdoc), so http://esp32.local stays reachable
+  // even if one of those stalls. The page falls back to the CDN for any asset
+  // not cached yet.
+  webBegin();
+  drawScreen();
+
+  assetsEnsureFresh();  // refresh the cached web-UI assets (Bootstrap/Chart.js) if stale + online
   drawScreen();
 
   weatherUpdateAll();
   lastWeather = millis();
-  drawScreen();
-
-  webBegin();  // start the LAN message server once Wi-Fi is up
   drawScreen();
 
   claudeUsageUpdate();
@@ -505,6 +515,13 @@ void loop() {
     // print temp/humidity once every SAMPLE_PRINT_INTERVAL (= every Nth sample)
     if (gotReading && ++sampleCount % (SAMPLE_PRINT_INTERVAL / SAMPLE_INTERVAL) == 0)
       logInfo("Temperature: %.2f C  Humidity: %.2f %%", lastTemp, lastHum);
+
+    // Append a sample to the yearly CSV once a minute, but only after the clock
+    // is set so the timestamps are real wall-clock time.
+    if (gotReading && time(nullptr) > 1700000000 && now - lastHistory >= HISTORY_INTERVAL) {
+      lastHistory = now;
+      historyAdd(time(nullptr), lastTemp, lastHum);
+    }
     drawScreen();
   }
 }

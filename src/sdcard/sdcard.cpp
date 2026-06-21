@@ -79,6 +79,19 @@ bool sdWriteText(const char *name, const String &text) {
   return n == text.length();
 }
 
+bool sdAppendText(const char *name, const String &text) {
+  if (!mounted) return false;
+  String p = fullPath(name);
+  FILE *f = fopen(p.c_str(), "ab");
+  if (!f) {
+    logError("SD append open failed: %s", p.c_str());
+    return false;
+  }
+  size_t n = text.length() ? fwrite(text.c_str(), 1, text.length(), f) : 0;
+  fclose(f);
+  return n == text.length();
+}
+
 String sdReadText(const char *name) {
   if (!mounted) return String();
   String p = fullPath(name);

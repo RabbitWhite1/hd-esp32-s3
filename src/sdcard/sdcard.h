@@ -13,8 +13,9 @@ bool sdBegin();    // mount; formats a raw/unreadable card so it becomes usable.
 bool sdMounted();  // true once a card is mounted
 bool sdFormat();   // wipe the card to a fresh FAT filesystem (requires a mounted card)
 
-bool sdWriteText(const char *name, const String &text);  // overwrite /sdcard/<name>; true on success
-String sdReadText(const char *name);                     // whole file as a String ("" if missing/unmounted)
+bool sdWriteText(const char *name, const String &text);   // overwrite /sdcard/<name>; true on success
+bool sdAppendText(const char *name, const String &text);  // append to /sdcard/<name> (created if absent); true on success
+String sdReadText(const char *name);                      // whole file as a String ("" if missing/unmounted)
 
 // Absolute path "/sdcard/<name>" for callers that stream a file directly with
 // fopen()/stat() (e.g. large cached assets). "" when no card is mounted.

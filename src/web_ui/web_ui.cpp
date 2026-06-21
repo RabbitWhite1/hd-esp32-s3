@@ -8,6 +8,7 @@
 #include "../weather/weather.h"            // add/remove weather cities (geocoded) from the form
 #include "../sdcard/sdcard.h"              // persist the to-do list to /sdcard/todo.md
 #include "../asset_cache/asset_cache.h"    // serve Bootstrap from SD (offline-capable)
+#include "../history/history.h"            // temp/humidity ring buffer for the NOW chart
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../time_sync/time_sync.h"        // select primary/secondary time zones from the form
 #include "../logging/logging.h"
@@ -124,22 +125,32 @@ static String saveBtn(const char *formId) {
   return s;
 }
 
-// Serve a cached asset from the local route when it's on the SD card, otherwise
-// fall back to its CDN URL (needed only until the cache is first populated).
-static String assetHref(const char *route) {
+// Assets load from the CDN first (the browser gets a fresh copy); the cached SD
+// copy at <route> is only a fallback for when the CDN is unreachable (offline).
+static String assetCdn(const char *route) {
   const CachedAsset *a = assetByRoute(route);
-  if (a && assetIsCached(*a)) return String(a->route);
   return a ? String(a->url) : String(route);
+}
+// <link> from the CDN; on load error, swap to the local cached copy.
+static String cssLink(const char *route) {
+  return "<link rel='stylesheet' href='" + assetCdn(route) +
+         "' onerror=\"this.onerror=null;this.href='" + route + "'\">";
+}
+// <script> from the CDN; if its global didn't define, synchronously document.write
+// the local cached copy as a fallback (runs during initial parse, preserving order).
+static String jsScript(const char *route, const char *glob) {
+  return "<script src='" + assetCdn(route) + "'></script>"
+         "<script>window." + glob + "||document.write('<script src=\"" + route +
+         "\"><\\/script>')</script>";
 }
 
 static void handleRoot() {
   String html =
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>hd panel</title>"
-    "<link href='";
-  html += assetHref("/bootstrap.css");
-  html += "' rel='stylesheet'>"
+    "<title>hd panel</title>";
+  html += cssLink("/bootstrap.css");
+  html +=
     "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:4rem}"
     "@media(max-width:767px){#sidenav{position:static!important}}</style>"
     "</head><body class='bg-body-tertiary'>"
@@ -172,6 +183,24 @@ static void handleRoot() {
   html += "</div></div><div><div class='text-muted small'>Humidity</div><div class='fs-4'>";
   html += haveSensor ? (String(rh, 1) + " %") : String("--");
   html += "</div></div></div>";
+  // Trend chart (temperature + humidity), averaged over a selectable range +
+  // granularity. JS fills the inputs (local time) and queries /history.
+  html += "<div class='row g-2 align-items-end mt-2'>"
+          "<div class='col-auto'><label class='form-label mb-0 small'>From</label>"
+          "<input type='datetime-local' id='hfrom' class='form-control form-control-sm'></div>"
+          "<div class='col-auto'><label class='form-label mb-0 small'>To</label>"
+          "<input type='datetime-local' id='hto' class='form-control form-control-sm'></div>"
+          "<div class='col-auto'><label class='form-label mb-0 small'>Bucket</label>"
+          "<select id='hbucket' class='form-select form-select-sm'>"
+          "<option value='minutely' selected>Minutely</option>"
+          "<option value='hourly'>Hourly</option>"
+          "<option value='daily'>Daily</option>"
+          "<option value='weekly'>Weekly</option>"
+          "<option value='monthly'>Monthly</option></select></div>"
+          "<div class='col-auto'><button id='happly' class='btn btn-sm btn-primary'>Apply</button></div>"
+          "</div>"
+          "<div class='mt-3' style='height:200px'><canvas id='thchart_t'></canvas></div>"
+          "<div class='mt-3' style='height:200px'><canvas id='thchart_h'></canvas></div>";
   html += cardClose;
 
   html += cardOpen("todo", "To-do",
@@ -348,12 +377,9 @@ static void handleRoot() {
   }
   html += "</div>";
 
-  html += "<script src='";
-  html += assetHref("/bootstrap.js");
-  html += "'></script>";
-  html += "<script src='";
-  html += assetHref("/sortable.js");
-  html += "'></script>";
+  html += jsScript("/bootstrap.js", "bootstrap");
+  html += jsScript("/sortable.js", "Sortable");
+  html += jsScript("/chart.js", "Chart");
 
   // Submit every POST form via fetch() so saving never reloads the whole page:
   // show a toast from the JSON result, then swap just #app with fresh content.
@@ -373,7 +399,63 @@ static void handleRoot() {
           "var doc=new DOMParser().parseFromString(await r.text(),'text/html');"
           "var fresh=doc.getElementById('app');"
           "if(fresh)document.getElementById('app').replaceWith(fresh);}catch(e){}"
-          "initSortable();}"
+          "initSortable();setupChart();}"
+          // NOW trend chart. setupChart() seeds the date inputs (local time) +
+          // wires controls; drawChart() queries /history for the averaged series.
+          "function pad(n){return ('0'+n).slice(-2);}"
+          "function fmtLocal(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())"
+          "+'T'+pad(d.getHours())+':'+pad(d.getMinutes());}"
+          // y-axis bounds: 10% below min / 10% above max of the data (10% of the
+          // absolute value, so it also widens for negative temps). {} when empty.
+          "function yrange(a){var v=[];for(var i=0;i<a.length;i++){if(a[i]!=null&&!isNaN(a[i]))v.push(a[i]);}"
+          "if(!v.length)return {};var mn=Math.min.apply(null,v),mx=Math.max.apply(null,v);"
+          "var lo=mn-0.1*Math.abs(mn),hi=mx+0.1*Math.abs(mx);"
+          "if(lo>=hi){lo=mn-1;hi=mx+1;}return {min:lo,max:hi};}"
+          // Pick a 'nice' x-axis tick step (seconds) for the visible span, and
+          // generate ticks aligned to local clock boundaries (00:00, 02:00, ...).
+          "function stepFor(s){if(s<=4*3600)return 1800;if(s<=12*3600)return 3600;"
+          "if(s<=28*3600)return 7200;if(s<=3*86400)return 21600;if(s<=8*86400)return 86400;"
+          "if(s<=70*86400)return 604800;return 2592000;}"
+          "function makeTicks(from,to){var st=stepFor(to-from);var d=new Date(from*1000);"
+          "var mid=Math.floor(new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime()/1000);"
+          "var v=mid+Math.ceil((from-mid)/st)*st,o=[];"
+          "for(;v<=to;v+=st)o.push(v);return o;}"
+          "function setupChart(){if(!document.getElementById('thchart_t'))return;"
+          "var f=document.getElementById('hfrom'),t=document.getElementById('hto');"
+          "if(f&&!f.value){var n=new Date();"
+          "var s=new Date(n.getFullYear(),n.getMonth(),n.getDate());"  // today 00:00 local
+          "f.value=fmtLocal(s);t.value=fmtLocal(new Date(s.getTime()+864e5));}"  // tomorrow 00:00
+
+          "var ap=document.getElementById('happly');if(ap)ap.onclick=function(e){e.preventDefault();drawChart();};"
+          "var bk=document.getElementById('hbucket');if(bk)bk.onchange=drawChart;"
+          "drawChart();}"
+          // Build one line chart (single series + own y-axis) sharing the time x-axis.
+          "function buildChart(id,label,data,raw,color,unit,from,to,showDate){"
+          "var cv=document.getElementById(id);if(!cv)return null;var yr=yrange(raw);"
+          "return new Chart(cv,{type:'line',data:{datasets:[{label:label,data:data,"
+          "borderColor:color,backgroundColor:color,tension:.3,pointRadius:0}]},"
+          "options:{responsive:true,maintainAspectRatio:false,animation:false,"
+          "interaction:{intersect:false,mode:'index'},scales:{"
+          "x:{type:'linear',min:from,max:to,"
+          "afterBuildTicks:function(ax){ax.ticks=makeTicks(from,to).map(function(v){return {value:v};});},"
+          "ticks:{autoSkip:false,callback:function(v){var d=new Date(v*1000);"
+          "return showDate?(d.getMonth()+1)+'/'+d.getDate():pad(d.getHours())+':'+pad(d.getMinutes());}}},"
+          "y:{title:{display:true,text:unit},min:yr.min,max:yr.max}}}});}"
+          "async function drawChart(){if(typeof Chart==='undefined')return;"
+          "if(!document.getElementById('thchart_t'))return;"
+          "var f=Math.floor(new Date(document.getElementById('hfrom').value).getTime()/1000);"
+          "var t=Math.floor(new Date(document.getElementById('hto').value).getTime()/1000);"
+          "var b=document.getElementById('hbucket').value;if(!f||!t)return;"
+          // Default to empty arrays so the axes still render when there's no data.
+          "var h={t:[],temp:[],hum:[],bucket:60};"
+          "try{var j=await (await fetch('/history?from='+f+'&to='+t+'&bucket='+b,"
+          "{headers:{'X-Requested-With':'fetch'}})).json();if(j&&j.t)h=j;}catch(e){}"
+          "var showDate=stepFor(t-f)>=86400;"
+          "var tp=h.t.map(function(s,i){return {x:s,y:h.temp[i]};});"
+          "var hm=h.t.map(function(s,i){return {x:s,y:h.hum[i]};});"
+          "if(window._thc)window._thc.destroy();if(window._thh)window._thh.destroy();"
+          "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,h.temp,'#dc3545','\\u00b0C',f,t,showDate);"
+          "window._thh=buildChart('thchart_h','Humidity %',hm,h.hum,'#0d6efd','%',f,t,showDate);}"
           // Make the Wi-Fi list drag-sortable; on drop, POST the new order (the
           // data-idx values in their new DOM order) and refresh in place.
           "function initSortable(){var el=document.getElementById('wifilist');"
@@ -400,7 +482,9 @@ static void handleRoot() {
           // no-JS fallback flash toast, if present
           "var fe=document.getElementById('flash');"
           "if(fe){new bootstrap.Toast(fe,{delay:6000}).show();}"
-          "initSortable();"
+          "initSortable();setupChart();"
+          // Keep the chart live; the interval persists across #app swaps.
+          "if(!window._thi){window._thi=setInterval(drawChart,60000);}"
           "</script></body></html>";
   server.send(200, "text/html", html);
 }
@@ -643,13 +727,34 @@ static void handleStats() {
   server.send(200, "application/json", j);
 }
 
+static long bucketSeconds(const String &b) {
+  if (b == "minutely") return 60;
+  if (b == "hourly") return 3600;
+  if (b == "daily") return 86400;
+  if (b == "weekly") return 7L * 86400;
+  if (b == "monthly") return 30L * 86400;
+  return 3600;
+}
+
+// GET /history?from=<epoch>&to=<epoch>&bucket=<name>: averaged temp/humidity over
+// the range, as JSON for the NOW chart (defaults to the last 24 h, hourly).
+static void handleHistory() {
+  time_t to = server.hasArg("to") ? (time_t)server.arg("to").toInt() : 0;
+  time_t from = server.hasArg("from") ? (time_t)server.arg("from").toInt() : 0;
+  long bs = bucketSeconds(server.hasArg("bucket") ? server.arg("bucket") : "hourly");
+  if (to <= 0) to = time(nullptr);
+  if (from <= 0) from = to - 86400;
+  server.send(200, "application/json", historyQuery(from, to, bs));
+}
+
 void webBegin() {
   todoLoad();  // restore the to-do list from SD (requires sdBegin() earlier in setup)
   // Capture this request header so respond() can tell fetch() calls from plain posts.
   static const char *HEADER_KEYS[] = {"X-Requested-With"};
   server.collectHeaders(HEADER_KEYS, sizeof(HEADER_KEYS) / sizeof(HEADER_KEYS[0]));
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/stats", HTTP_GET, handleStats);  // curl-friendly JSON snapshot
+  server.on("/stats", HTTP_GET, handleStats);    // curl-friendly JSON snapshot
+  server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW chart
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
   server.on("/gdoc", HTTP_POST, handleGdoc);
