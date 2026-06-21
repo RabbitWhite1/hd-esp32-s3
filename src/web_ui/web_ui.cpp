@@ -444,6 +444,14 @@ static void handleRoot() {
   }
   html += "</div>";
 
+  // Busy overlay: the ESP32 handles each action slowly, so dim the page and show
+  // a rotating spinner while a POST + in-place refresh is in flight.
+  html += "<div id='busy' class='position-fixed top-0 start-0 w-100 h-100 d-none' "
+          "style='background:rgba(0,0,0,.3);z-index:2000;'>"
+          "<div class='position-absolute top-50 start-50 translate-middle text-center'>"
+          "<div class='spinner-border text-light' style='width:3rem;height:3rem' role='status'></div>"
+          "<div class='text-light mt-2 fw-semibold'>Processing&hellip;</div></div></div>";
+
   html += jsScript("/bootstrap.js", "bootstrap");
   html += jsScript("/sortable.js", "Sortable");
   html += jsScript("/chart.js", "Chart");
@@ -451,6 +459,8 @@ static void handleRoot() {
   // Submit every POST form via fetch() so saving never reloads the whole page:
   // show a toast from the JSON result, then swap just #app with fresh content.
   html += "<script>"
+          "function busyOn(){document.getElementById('busy').classList.remove('d-none');}"
+          "function busyOff(){document.getElementById('busy').classList.add('d-none');}"
           "function showToast(ok,msg){var c=document.getElementById('toasts');"
           "var d=document.createElement('div');"
           "d.className='toast align-items-center border-0 text-bg-'+(ok?'success':'danger');"
@@ -530,22 +540,26 @@ static void handleRoot() {
           "Sortable.create(el,{handle:'.wifi-handle',animation:150,onEnd:async function(){"
           "var ids=[].map.call(el.children,function(li){return li.getAttribute('data-idx');})"
           ".filter(function(x){return x!==null;}).join(',');"
+          "busyOn();"
           "try{var r=await fetch('/wifiorder',{method:'POST',"
           "headers:{'X-Requested-With':'fetch','Content-Type':'application/x-www-form-urlencoded'},"
           "body:'order='+encodeURIComponent(ids)});"
           "var d={ok:true,msg:''};try{d=await r.json();}catch(e){}"
           "if(d.msg)showToast(!!d.ok,d.msg);await reloadApp();}"
-          "catch(e){showToast(false,'Reorder failed');}}});}"
+          "catch(e){showToast(false,'Reorder failed');}"
+          "finally{busyOff();}}});}"
           "document.addEventListener('submit',async function(ev){"
           "var f=ev.target;if((f.method||'').toLowerCase()!=='post')return;"
           "ev.preventDefault();"
           "var body=new URLSearchParams(new FormData(f));"
           "var s=ev.submitter;if(s&&s.name)body.append(s.name,s.value);"
+          "busyOn();"
           "try{var r=await fetch(f.getAttribute('action'),"
           "{method:'POST',headers:{'X-Requested-With':'fetch'},body:body});"
           "var data={ok:true,msg:''};try{data=await r.json();}catch(e){}"
           "if(data.msg)showToast(!!data.ok,data.msg);await reloadApp();}"
-          "catch(e){showToast(false,'Request failed (device may have switched Wi-Fi)');}});"
+          "catch(e){showToast(false,'Request failed (device may have switched Wi-Fi)');}"
+          "finally{busyOff();}});"
           // no-JS fallback flash toast, if present
           "var fe=document.getElementById('flash');"
           "if(fe){new bootstrap.Toast(fe,{delay:6000}).show();}"
