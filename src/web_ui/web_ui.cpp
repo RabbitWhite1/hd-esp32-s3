@@ -503,12 +503,16 @@ static void handleRoot() {
           "function pad(n){return ('0'+n).slice(-2);}"
           "function fmtLocal(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())"
           "+'T'+pad(d.getHours())+':'+pad(d.getMinutes());}"
-          // y-axis bounds: 10% below min / 10% above max of the data (10% of the
-          // absolute value, so it also widens for negative temps). {} when empty.
-          "function yrange(a){var v=[];for(var i=0;i<a.length;i++){if(a[i]!=null&&!isNaN(a[i]))v.push(a[i]);}"
-          "if(!v.length)return {};var mn=Math.min.apply(null,v),mx=Math.max.apply(null,v);"
-          "var lo=mn-0.1*Math.abs(mn),hi=mx+0.1*Math.abs(mx);"
-          "if(lo>=hi){lo=mn-1;hi=mx+1;}return {min:lo,max:hi};}"
+          // Temperature y-axis: a fixed indoor band by default, stretched only on
+          // the side where data actually goes past it (by 10% of that value).
+          // Humidity is always pinned to 0-100. Tweak the band via these constants.
+          "var TEMP_MIN_C=0,TEMP_MAX_C=40;"
+          "function tempRange(a){var lo=TEMP_MIN_C,hi=TEMP_MAX_C,v=[];"
+          "for(var i=0;i<a.length;i++){if(a[i]!=null&&!isNaN(a[i]))v.push(a[i]);}"
+          "if(v.length){var mn=Math.min.apply(null,v),mx=Math.max.apply(null,v);"
+          "if(mn<TEMP_MIN_C)lo=mn-0.1*Math.abs(mn);"
+          "if(mx>TEMP_MAX_C)hi=mx+0.1*Math.abs(mx);}"
+          "return {min:lo,max:hi};}"
           // Pick a 'nice' x-axis tick step (seconds) for the visible span, and
           // generate ticks aligned to local clock boundaries (00:00, 02:00, ...).
           "function stepFor(s){if(s<=4*3600)return 1800;if(s<=12*3600)return 3600;"
@@ -528,8 +532,8 @@ static void handleRoot() {
           "var bk=document.getElementById('hbucket');if(bk)bk.onchange=drawChart;"
           "drawChart();}"
           // Build one line chart (single series + own y-axis) sharing the time x-axis.
-          "function buildChart(id,label,data,raw,color,unit,from,to,showDate){"
-          "var cv=document.getElementById(id);if(!cv)return null;var yr=yrange(raw);"
+          "function buildChart(id,label,data,yr,color,unit,from,to,showDate){"
+          "var cv=document.getElementById(id);if(!cv)return null;"
           "return new Chart(cv,{type:'line',data:{datasets:[{label:label,data:data,"
           "borderColor:color,backgroundColor:color,tension:.3,pointRadius:0}]},"
           "options:{responsive:true,maintainAspectRatio:false,animation:false,"
@@ -552,8 +556,8 @@ static void handleRoot() {
           "var tp=h.t.map(function(s,i){return {x:s,y:h.temp[i]};});"
           "var hm=h.t.map(function(s,i){return {x:s,y:h.hum[i]};});"
           "if(window._thc)window._thc.destroy();if(window._thh)window._thh.destroy();"
-          "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,h.temp,'#dc3545','\\u00b0C',f,t,showDate);"
-          "window._thh=buildChart('thchart_h','Humidity %',hm,h.hum,'#0d6efd','%',f,t,showDate);}"
+          "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,tempRange(h.temp),'#dc3545','\\u00b0C',f,t,showDate);"
+          "window._thh=buildChart('thchart_h','Humidity %',hm,{min:0,max:100},'#0d6efd','%',f,t,showDate);}"
           // Make the Wi-Fi list drag-sortable; on drop, POST the new order (the
           // data-idx values in their new DOM order) and refresh in place.
           "function initSortable(){var el=document.getElementById('wifilist');"
