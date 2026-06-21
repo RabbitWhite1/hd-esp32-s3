@@ -79,6 +79,39 @@ void claudeUsageSetOrgId(const String &id) {
 void claudeUsageSetSessionKey(const String &key) {
   if (key.length() > 0) sessionKey = key;  // "" means "keep current key"
 }
+
+// Extract the value of cookie `name` from a "a=b; c=d; ..." string. Matches only
+// at a token boundary (start, or after "; "), so searching "sessionKey" never
+// hits "sessionKeyLC"; the value runs to the next ';' or end of string.
+static String cookieValue(const String &cookie, const char *name) {
+  String key = String(name) + "=";
+  int from = 0;
+  while (from <= (int)cookie.length()) {
+    int idx = cookie.indexOf(key, from);
+    if (idx < 0) return "";
+    bool boundary = (idx == 0) || cookie[idx - 1] == ';' || cookie[idx - 1] == ' ';
+    if (boundary) {
+      int valStart = idx + key.length();
+      int end = cookie.indexOf(';', valStart);
+      String v = (end < 0) ? cookie.substring(valStart) : cookie.substring(valStart, end);
+      v.trim();
+      return v;
+    }
+    from = idx + key.length();
+  }
+  return "";
+}
+
+bool claudeUsageSetFromCookie(const String &cookie) {
+  String org = cookieValue(cookie, "lastActiveOrg");
+  if (org.length() > 0) orgId = org;
+  String key = cookieValue(cookie, "sessionKey");
+  if (key.length() > 0) {
+    sessionKey = key;
+    return true;
+  }
+  return false;
+}
 time_t claudeUsageAsOf() {
   return asOf;
 }

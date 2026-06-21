@@ -17,6 +17,10 @@ time_t claudeUsageAsOf();   // wall-clock time of the last successful fetch (0 =
 // Credentials (held in RAM; cleared on reboot).
 void claudeUsageSetOrgId(const String &orgId);
 void claudeUsageSetSessionKey(const String &key);  // pass "" to keep the current key
+// Parse a whole browser "Cookie:" header string: pulls out the sessionKey value
+// (and the org id from lastActiveOrg, if present). Returns true if a session key
+// was found. Convenience for pasting the full cookie instead of the two fields.
+bool claudeUsageSetFromCookie(const String &cookie);
 const String &claudeUsageOrgId();
 const String &claudeUsageSessionKey();  // current session key ("" if unset)
 bool claudeUsageHasKey();  // true once a non-empty session key has been set

@@ -363,7 +363,30 @@ static void handleRoot() {
   html += claudeUsageHasKey() ? "<span class='badge text-bg-success'>set</span>"
                               : "<span class='badge text-bg-secondary'>not set</span>";
   html += "</label><input type='text' class='form-control' name='key' "
-          "placeholder='leave blank to keep current'></form>";
+          "placeholder='leave blank to keep current'>";
+  // OR: paste the whole browser Cookie header and let the device pull out
+  // sessionKey (and the org id from lastActiveOrg).
+  html += "<div class='d-flex align-items-center my-3'>"
+          "<hr class='flex-grow-1'>"
+          "<span class='mx-3 fw-bold text-muted fs-5'>OR</span>"
+          "<hr class='flex-grow-1'></div>"
+          "<label class='form-label'>Paste full cookie</label>"
+          "<textarea class='form-control' name='cookie' rows='4' "
+          "placeholder='anthropic-device-id=...; sessionKey=sk-ant-...; lastActiveOrg=...; ...'></textarea>"
+          "<div class='form-text'>Paste the entire Cookie header from your browser; the device "
+          "extracts <code>sessionKey</code> (and the org id from <code>lastActiveOrg</code>). "
+          "Takes priority over the fields above.</div>"
+          // Step-by-step for grabbing the Cookie header (collapsed by default).
+          "<details class='mt-2'><summary class='text-primary' style='cursor:pointer'>"
+          "How do I get the cookie?</summary>"
+          "<ol class='form-text mb-0 mt-2'>"
+          "<li>Open <a href='https://claude.ai' target='_blank' rel='noopener'>claude.ai</a> and sign in.</li>"
+          "<li>Press <kbd>F12</kbd> to open the browser developer tools.</li>"
+          "<li>Switch to the <strong>Network</strong> tab.</li>"
+          "<li>In Claude, open <strong>Settings &rarr; Usage</strong> (so a usage request fires).</li>"
+          "<li>In the Network tab, click the <code>usage</code> request.</li>"
+          "<li>Under <strong>Headers &rarr; Request Headers</strong>, copy the whole <code>Cookie</code> value and paste it above.</li>"
+          "</ol></details></form>";
   html += cardClose;
 
   // Wi-Fi: list the saved (known-good) networks and add a new one. A network is
@@ -617,6 +640,19 @@ static void handleWifiOrder() {
 }
 
 static void handleClaude() {
+  // A pasted full cookie takes priority over the individual org/key fields.
+  String cookie = server.hasArg("cookie") ? server.arg("cookie") : String("");
+  cookie.trim();
+  if (cookie.length() > 0) {
+    if (!claudeUsageSetFromCookie(cookie)) {
+      respond(false, "No sessionKey found in the pasted cookie");
+      return;
+    }
+    logInfo("Claude credentials updated from pasted cookie via web UI");
+    claudeUsageUpdate();
+    respond(true, "Claude credentials saved from cookie");
+    return;
+  }
   if (server.hasArg("org")) claudeUsageSetOrgId(server.arg("org"));
   if (server.hasArg("key")) claudeUsageSetSessionKey(server.arg("key"));  // empty -> keep current
   logInfo("Claude credentials updated via web UI");
