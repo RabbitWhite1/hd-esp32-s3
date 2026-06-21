@@ -43,6 +43,67 @@ static void startMdns() {
   }
 }
 
+// ---------- first-time setup hotspot (SoftAP) ----------
+// Open AP brought up only when no saved network can be joined, so a phone can
+// connect and configure Wi-Fi. WIFI_AP_STA keeps the station side alive while the
+// AP is up, so we can still scan and test-connect candidate networks.
+static const char *AP_SSID = "h4d-setup";
+static bool apMode = false;       // true while the setup AP is up
+static uint32_t apStopAt = 0;     // when !=0, tear the AP down at this millis() (deferred so a reply can flush)
+
+bool wifiInSetupMode() {
+  return apMode;
+}
+const char *wifiSetupApSsid() {
+  return AP_SSID;
+}
+
+void wifiStartSetupAP() {
+  if (apMode) return;  // idempotent
+  WiFi.mode(WIFI_AP_STA);
+  bool ok = WiFi.softAP(AP_SSID);  // open network (no password) for easy first join
+  apMode = true;
+  apStopAt = 0;
+  IPAddress ip = WiFi.softAPIP();
+  if (ok)
+    logInfo("WiFi setup AP up: join '%s', then open http://%s/", AP_SSID, ip.toString().c_str());
+  else
+    logError("WiFi setup AP failed to start");
+  // Surface it on the LCD footer (rendered via wifiStatus()).
+  setStatus(String("Setup: join '") + AP_SSID + "' -> " + ip.toString());
+}
+
+static void stopSetupAP() {
+  if (!apMode) return;
+  WiFi.softAPdisconnect(true);  // stop broadcasting + free the AP
+  WiFi.mode(WIFI_STA);
+  apMode = false;
+  apStopAt = 0;
+  logInfo("WiFi setup AP stopped (joined a network)");
+}
+
+void wifiRequestStopAP(uint32_t delayMs) {
+  if (apMode) apStopAt = millis() + delayMs;
+}
+
+void wifiLoop() {
+  // Deferred AP teardown: once we've joined a real network we keep the AP up for
+  // a short grace period so the setup page's "Connected" reply can reach the phone.
+  if (apStopAt && (int32_t)(millis() - apStopAt) >= 0) {
+    stopSetupAP();
+    startMdns();  // re-advertise on the freshly joined network
+    if (redrawHook) redrawHook();
+  }
+}
+
+int wifiScan() {
+  int n = WiFi.scanNetworks();  // synchronous; negative on failure
+  return n < 0 ? 0 : n;
+}
+String wifiScanSSID(int i) {
+  return WiFi.SSID(i);
+}
+
 // Attempt to join one network, giving up after timeoutMs instead of blocking forever.
 static bool tryConnect(const char *s, const char *p, uint32_t timeoutMs) {
   logInfo("WiFi try %s", s);
@@ -58,18 +119,22 @@ static bool tryConnect(const char *s, const char *p, uint32_t timeoutMs) {
 }
 
 void wifiBegin() {
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(apMode ? WIFI_AP_STA : WIFI_STA);  // keep the setup AP alive while retrying
   bool connected = false;
   for (int i = 0; i < netCount && !connected; i++) {
     setStatus(String("Trying ") + nets[i].ssid);  // shown on the LCD footer
     connected = tryConnect(nets[i].ssid.c_str(), nets[i].pass.c_str(), 8000);
   }
   statusMsg = "";  // attempt phase over; footer reverts to joined/disconnected
-  if (connected)
+  if (connected) {
     logInfo("WiFi connected to %s, IP: %s", currentSsid.c_str(), WiFi.localIP().toString().c_str());
-  else
+    startMdns();
+    if (apMode) wifiRequestStopAP(3000);  // got onto a real network; drop the setup AP shortly
+  } else {
+    // Only NOW — after every saved SSID/password has failed — do we expose the AP.
     logError("WiFi: no known network joined");
-  if (connected) startMdns();
+    wifiStartSetupAP();
+  }
   if (redrawHook) redrawHook();  // reflect the final state immediately
 }
 
@@ -176,6 +241,7 @@ bool wifiAddNetwork(const String &s, const String &p) {
   }
   upsertNetwork(s, p);
   startMdns();  // re-advertise on the new connection
+  if (apMode) wifiRequestStopAP(3000);  // configured via the setup AP; tear it down once the reply flushes
   logInfo("WiFi network saved + connected: %s", s.c_str());
   return true;
 }

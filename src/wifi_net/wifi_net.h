@@ -41,3 +41,18 @@ bool wifiApplyOrder(const int *order, int count);
 bool wifiOrderDirty();           // true once moved but not yet persisted (cleared by save/load)
 int wifiNetCount();              // number of saved networks
 const char *wifiNetSSID(int i);  // i-th saved SSID ("" if out of range)
+
+// ---------- first-time setup hotspot (SoftAP) ----------
+// When wifiBegin() can't join ANY saved network, the device brings up an OPEN
+// access point so a phone can connect and configure Wi-Fi via the minimal setup
+// page (served at http://192.168.4.1/). The AP is torn down as soon as a network
+// is successfully joined, so it is only ever up while no saved network works.
+void wifiStartSetupAP();         // bring up the setup AP (idempotent; no-op if already up)
+bool wifiInSetupMode();          // true while the setup AP is up (no STA network joined)
+const char *wifiSetupApSsid();   // the open AP's SSID (e.g. "h4d-setup")
+void wifiRequestStopAP(uint32_t delayMs);  // schedule AP teardown after delayMs (lets a final HTTP reply flush)
+void wifiLoop();                 // call often from loop(): performs any pending AP teardown
+// Synchronous scan of nearby networks for the setup page's pick-list. wifiScan()
+// returns the count; SSIDs are then read by index.
+int wifiScan();
+String wifiScanSSID(int i);

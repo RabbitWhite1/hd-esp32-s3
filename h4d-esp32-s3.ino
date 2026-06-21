@@ -449,6 +449,7 @@ void setup() {
 
 void loop() {
   wifiEnsureConnected();
+  wifiLoop();   // tear down the first-time setup AP once a real network is joined
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
 
   // KEY button: debounce; on press (HIGH->LOW) chime + force-refresh weather/Claude usage
