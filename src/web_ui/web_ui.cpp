@@ -430,12 +430,16 @@ static void handleRoot() {
             "</form></li>";
   }
   html += "</ul>";
-  // Up/down only reorder in RAM; this button persists the order to the SD card.
-  // It lights up (primary) once the order has unsaved changes.
-  html += "<form action='/wifisave' method='POST' class='mb-3'>"
-          "<button class='btn btn-sm ";
+  // Dragging only rearranges the list in the browser; this button is what sends
+  // the order to the device (apply + persist to SD). The hidden field is filled
+  // with the current drag order at submit time. It lights up (primary) once the
+  // order has unsaved changes (the per-row "move to top" also marks it dirty).
+  html += "<form id='wifisaveform' action='/wifisave' method='POST' class='mb-3'>"
+          "<input type='hidden' name='order' id='wifiorderinput'>"
+          "<button id='wifisavebtn' class='btn btn-sm ";
   html += wifiOrderDirty() ? "btn-primary" : "btn-outline-secondary";
   html += "'>Save order</button></form>";
+  html += "<hr>";  // separate the saved-list/order section from adding a network
   html += "<form action='/wifi' method='POST'>"
           "<label class='form-label'>SSID</label>"
           "<input type='text' class='form-control mb-2' name='ssid'>"
@@ -562,20 +566,21 @@ static void handleRoot() {
           // data-idx values in their new DOM order) and refresh in place.
           "function initSortable(){var el=document.getElementById('wifilist');"
           "if(!el||typeof Sortable==='undefined')return;"
-          "Sortable.create(el,{handle:'.wifi-handle',animation:150,onEnd:async function(){"
-          "var ids=[].map.call(el.children,function(li){return li.getAttribute('data-idx');})"
-          ".filter(function(x){return x!==null;}).join(',');"
-          "busyOn();"
-          "try{var r=await fetch('/wifiorder',{method:'POST',"
-          "headers:{'X-Requested-With':'fetch','Content-Type':'application/x-www-form-urlencoded'},"
-          "body:'order='+encodeURIComponent(ids)});"
-          "var d={ok:true,msg:''};try{d=await r.json();}catch(e){}"
-          "if(d.msg)showToast(!!d.ok,d.msg);await reloadApp();}"
-          "catch(e){showToast(false,'Reorder failed');}"
-          "finally{busyOff();}}});}"
+          "Sortable.create(el,{handle:'.wifi-handle',animation:150,onEnd:function(evt){"
+          "if(evt.oldIndex===evt.newIndex)return;"  // dropped back in place -> nothing changed
+          // Reorder lives in the DOM only; nothing is sent to the device until the
+          // user clicks 'Save order'. Light that button to flag unsaved changes.
+          "var b=document.getElementById('wifisavebtn');"
+          "if(b){b.classList.remove('btn-outline-secondary');b.classList.add('btn-primary');}}});}"
           "document.addEventListener('submit',async function(ev){"
           "var f=ev.target;if((f.method||'').toLowerCase()!=='post')return;"
           "ev.preventDefault();"
+          // Save order: capture the current drag order (data-idx in DOM order) so
+          // the device applies + persists exactly what's shown.
+          "if(f.id==='wifisaveform'){var wl=document.getElementById('wifilist');"
+          "var oi=document.getElementById('wifiorderinput');"
+          "if(wl&&oi)oi.value=[].map.call(wl.children,function(li){return li.getAttribute('data-idx');})"
+          ".filter(function(x){return x!==null;}).join(',');}"
           "var body=new URLSearchParams(new FormData(f));"
           "var s=ev.submitter;if(s&&s.name)body.append(s.name,s.value);"
           "busyOn();"
@@ -652,30 +657,31 @@ static void handleWifiEdit() {
   respond(ok, msg);
 }
 
+// "Save order": apply the drag order if one was sent ("order" = CSV of old
+// indices in their new positions; empty = keep the current RAM order, e.g. the
+// no-JS / move-to-top path), then persist to SD. Dragging itself never hits the
+// device; this is the only place the order is saved.
 static void handleWifiSave() {
-  wifiSaveNetworks();
-  logInfo("WiFi priority order saved via web");
-  respond(true, "Priority order saved");
-}
-
-// Apply a drag-and-drop reorder: "order" is a CSV of the old indices in their
-// new positions. Reorders in RAM only; the user still clicks "Save order".
-static void handleWifiOrder() {
   String csv = server.hasArg("order") ? server.arg("order") : "";
-  int order[16];  // matches MAX_NETS in wifi_net
-  int n = 0;
-  int start = 0;
-  while (start <= (int)csv.length() && n < 16) {
-    int comma = csv.indexOf(',', start);
-    String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
-    tok.trim();
-    if (tok.length()) order[n++] = tok.toInt();
-    if (comma < 0) break;
-    start = comma + 1;
+  csv.trim();
+  bool ok = true;
+  if (csv.length()) {
+    int order[16];  // matches MAX_NETS in wifi_net
+    int n = 0;
+    int start = 0;
+    while (start <= (int)csv.length() && n < 16) {
+      int comma = csv.indexOf(',', start);
+      String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+      tok.trim();
+      if (tok.length()) order[n++] = tok.toInt();
+      if (comma < 0) break;
+      start = comma + 1;
+    }
+    ok = wifiApplyOrder(order, n);
   }
-  bool ok = wifiApplyOrder(order, n);
-  logInfo("WiFi reorder via web (%d items): %s", n, ok ? "applied" : "rejected");
-  respond(ok, ok ? "Order changed - click 'Save order' to keep it" : "Reorder failed");
+  if (ok) wifiSaveNetworks();
+  logInfo("WiFi order saved via web: %s", ok ? "ok" : "rejected");
+  respond(ok, ok ? "Priority order saved" : "Reorder failed");
 }
 
 static void handleClaude() {
@@ -916,7 +922,6 @@ void webBegin() {
   server.on("/wifi", HTTP_POST, handleWifi);
   server.on("/wifiedit", HTTP_POST, handleWifiEdit);
   server.on("/wifisave", HTTP_POST, handleWifiSave);
-  server.on("/wifiorder", HTTP_POST, handleWifiOrder);
   server.onNotFound([]() {
     // Captive portal: while the setup AP is up, the OS connectivity probes
     // (Android /generate_204, iOS /hotspot-detect.html, Windows /connecttest.txt,
