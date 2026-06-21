@@ -356,8 +356,8 @@ static void handleRoot() {
   html += "<form id='citysaveform' action='/weatherorder' method='POST' class='mb-3'>"
           "<input type='hidden' name='order' id='cityorderinput'>"
           "<button id='citysavebtn' class='btn btn-sm ";
-  html += weatherOrderDirty() ? "btn-primary" : "btn-outline-secondary";
-  html += "'>Save order</button></form>";
+  html += weatherOrderDirty() ? "btn-primary'" : "btn-outline-secondary' disabled";
+  html += ">Save order</button></form>";
   html += "<hr>";  // separate the list/order section from adding a city
   if (weatherCityCount() < weatherMaxCities()) {
     html += "<form action='/weatheradd' method='POST' class='row g-2'>"
@@ -474,8 +474,8 @@ static void handleRoot() {
   html += "<form id='wifisaveform' action='/wifisave' method='POST' class='mb-3'>"
           "<input type='hidden' name='order' id='wifiorderinput'>"
           "<button id='wifisavebtn' class='btn btn-sm ";
-  html += wifiOrderDirty() ? "btn-primary" : "btn-outline-secondary";
-  html += "'>Save order</button></form>";
+  html += wifiOrderDirty() ? "btn-primary'" : "btn-outline-secondary' disabled";
+  html += ">Save order</button></form>";
   html += "<hr>";  // separate the saved-list/order section from adding a network
   // SSID + password inputs and both add buttons on one row.
   // 'Add' stores without testing; 'Test then Add' verifies the join first
@@ -620,7 +620,7 @@ static void handleRoot() {
           "Sortable.create(el,{handle:'.drag-handle',animation:150,onEnd:function(evt){"
           "if(evt.oldIndex===evt.newIndex)return;"  // dropped back in place -> nothing changed
           "var b=document.getElementById(btnId);"
-          "if(b){b.classList.remove('btn-outline-secondary');b.classList.add('btn-primary');}}});}"
+          "if(b){b.classList.remove('btn-outline-secondary');b.classList.add('btn-primary');b.disabled=false;}}});}"
           "function initSortable(){makeSortable('wifilist','wifisavebtn');makeSortable('citylist','citysavebtn');}"
           // Fill a Save-order form's hidden field with its list's current DOM order.
           "function fillOrder(listId,inputId){var wl=document.getElementById(listId);"
