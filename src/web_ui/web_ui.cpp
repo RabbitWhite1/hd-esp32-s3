@@ -352,10 +352,33 @@ static void handleRoot() {
   html += cardClose;
 
   // Claude usage credentials (kept in RAM on the device, never in the firmware).
-  // The stored session key is NEVER written into the page, so anyone on the LAN
-  // can't read it from the source. Leave the field blank to keep the current key.
-  html += cardOpen("claude", "Claude usage", saveBtn("claudeform"));
-  html += "<form id='claudeform' action='/claude' method='POST'>"
+  // Two ways to set them, in tabs; the header Save button submits the active
+  // tab's form (default: the cookie paste). The how-to sits outside the tabs so
+  // it's shown for both.
+  html += cardOpen("claude", "Claude usage",
+                   "<button id='claudesave' class='btn btn-sm btn-primary' form='claudeform_cookie'>Save</button>");
+  html += "<ul class='nav nav-tabs mb-3' role='tablist'>"
+          "<li class='nav-item'><button class='nav-link active' type='button' role='tab' "
+          "data-bs-toggle='tab' data-bs-target='#claude-cookie' data-form='claudeform_cookie'>Cookie</button></li>"
+          "<li class='nav-item'><button class='nav-link' type='button' role='tab' "
+          "data-bs-toggle='tab' data-bs-target='#claude-fields' data-form='claudeform_fields'>Org ID + key</button></li>"
+          "</ul><div class='tab-content'>";
+
+  // Cookie tab (default): paste the whole browser Cookie header; the device pulls
+  // out sessionKey (and the org id from lastActiveOrg).
+  html += "<div class='tab-pane fade show active' id='claude-cookie' role='tabpanel'>"
+          "<form id='claudeform_cookie' action='/claude' method='POST'>"
+          "<label class='form-label'>Paste full cookie</label>"
+          "<textarea class='form-control' name='cookie' rows='4' "
+          "placeholder='anthropic-device-id=...; sessionKey=sk-ant-...; lastActiveOrg=...; ...'></textarea>"
+          "<div class='form-text'>The device extracts <code>sessionKey</code> (and the org id from "
+          "<code>lastActiveOrg</code>).</div></form></div>";
+
+  // Org ID + session key tab. The stored session key is NEVER written into the
+  // page, so anyone on the LAN can't read it from the source; leave the key field
+  // blank to keep the current one.
+  html += "<div class='tab-pane fade' id='claude-fields' role='tabpanel'>"
+          "<form id='claudeform_fields' action='/claude' method='POST'>"
           "<label class='form-label'>Org ID</label>"
           "<input type='text' class='form-control mb-3' name='org' value='";
   html += htmlEscape(claudeUsageOrgId());
@@ -363,21 +386,12 @@ static void handleRoot() {
   html += claudeUsageHasKey() ? "<span class='badge text-bg-success'>set</span>"
                               : "<span class='badge text-bg-secondary'>not set</span>";
   html += "</label><input type='text' class='form-control' name='key' "
-          "placeholder='leave blank to keep current'>";
-  // OR: paste the whole browser Cookie header and let the device pull out
-  // sessionKey (and the org id from lastActiveOrg).
-  html += "<div class='d-flex align-items-center my-3'>"
-          "<hr class='flex-grow-1'>"
-          "<span class='mx-3 fw-bold text-muted fs-5'>OR</span>"
-          "<hr class='flex-grow-1'></div>"
-          "<label class='form-label'>Paste full cookie</label>"
-          "<textarea class='form-control' name='cookie' rows='4' "
-          "placeholder='anthropic-device-id=...; sessionKey=sk-ant-...; lastActiveOrg=...; ...'></textarea>"
-          "<div class='form-text'>Paste the entire Cookie header from your browser; the device "
-          "extracts <code>sessionKey</code> (and the org id from <code>lastActiveOrg</code>). "
-          "Takes priority over the fields above.</div>"
-          // Step-by-step for grabbing the Cookie header (collapsed by default).
-          "<details class='mt-2'><summary class='text-primary' style='cursor:pointer'>"
+          "placeholder='leave blank to keep current'></form></div>";
+
+  html += "</div>";  // /tab-content
+
+  // How-to (outside the tabs, shown for both methods).
+  html += "<details class='mt-3'><summary class='text-primary' style='cursor:pointer'>"
           "How do I get the cookie?</summary>"
           "<ol class='form-text mb-0 mt-2'>"
           "<li>Open <a href='https://claude.ai' target='_blank' rel='noopener'>claude.ai</a> and sign in.</li>"
@@ -385,8 +399,10 @@ static void handleRoot() {
           "<li>Switch to the <strong>Network</strong> tab.</li>"
           "<li>In Claude, open <strong>Settings &rarr; Usage</strong> (so a usage request fires).</li>"
           "<li>In the Network tab, click the <code>usage</code> request.</li>"
-          "<li>Under <strong>Headers &rarr; Request Headers</strong>, copy the whole <code>Cookie</code> value and paste it above.</li>"
-          "</ol></details></form>";
+          "<li>Under <strong>Headers &rarr; Request Headers</strong>: copy the whole <code>Cookie</code> value "
+          "for the Cookie tab &mdash; or read off <code>sessionKey</code> and <code>lastActiveOrg</code> "
+          "for the Org ID + key tab.</li>"
+          "</ol></details>";
   html += cardClose;
 
   // Wi-Fi: list the saved (known-good) networks and add a new one. A network is
@@ -461,6 +477,11 @@ static void handleRoot() {
   html += "<script>"
           "function busyOn(){document.getElementById('busy').classList.remove('d-none');}"
           "function busyOff(){document.getElementById('busy').classList.add('d-none');}"
+          // Point the Claude card's Save button at whichever tab's form is active.
+          // Delegated on document so it survives the #app swap after each save.
+          "document.addEventListener('shown.bs.tab',function(ev){"
+          "var fm=ev.target.getAttribute('data-form');if(!fm)return;"
+          "var sb=document.getElementById('claudesave');if(sb)sb.setAttribute('form',fm);});"
           "function showToast(ok,msg){var c=document.getElementById('toasts');"
           "var d=document.createElement('div');"
           "d.className='toast align-items-center border-0 text-bg-'+(ok?'success':'danger');"
