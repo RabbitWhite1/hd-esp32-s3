@@ -67,8 +67,17 @@ String wifiSetupApIp() {
   return apMode ? apIp.toString() : String("");
 }
 
+// The setup-AP footer line, kept in one place so the idempotent re-entry below
+// can restore it after wifiBegin() clears statusMsg on each reconnect retry.
+static void setSetupStatus() {
+  setStatus(String("Setup: join '") + AP_SSID + "' -> " + apIp.toString());
+}
+
 void wifiStartSetupAP() {
-  if (apMode) return;  // idempotent
+  if (apMode) {
+    setSetupStatus();  // already up; just refresh the footer (wifiBegin cleared it)
+    return;
+  }
   WiFi.mode(WIFI_AP_STA);
   bool ok = WiFi.softAP(AP_SSID);  // open network (no password) for easy first join
   apMode = true;
@@ -80,8 +89,7 @@ void wifiStartSetupAP() {
     logInfo("WiFi setup AP up: join '%s', then open http://%s/", AP_SSID, apIp.toString().c_str());
   else
     logError("WiFi setup AP failed to start");
-  // Surface it on the LCD footer (rendered via wifiStatus()).
-  setStatus(String("Setup: join '") + AP_SSID + "' -> " + apIp.toString());
+  setSetupStatus();  // surface it on the LCD footer (rendered via wifiStatus())
 }
 
 static void stopSetupAP() {
