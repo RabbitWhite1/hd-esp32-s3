@@ -842,7 +842,18 @@ void webBegin() {
   server.on("/wifiedit", HTTP_POST, handleWifiEdit);
   server.on("/wifisave", HTTP_POST, handleWifiSave);
   server.on("/wifiorder", HTTP_POST, handleWifiOrder);
-  server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
+  server.onNotFound([]() {
+    // Captive portal: while the setup AP is up, the OS connectivity probes
+    // (Android /generate_204, iOS /hotspot-detect.html, Windows /connecttest.txt,
+    // ...) land here via the catch-all DNS. Redirect them to the setup page so the
+    // phone auto-opens the "Sign in to network" sheet.
+    if (wifiInSetupMode()) {
+      server.sendHeader("Location", "http://" + wifiSetupApIp() + "/");
+      server.send(302, "text/plain", "");
+      return;
+    }
+    server.send(404, "text/plain", "Not found");
+  });
   server.begin();
   logInfo("Web UI listening on port 80");
 }
