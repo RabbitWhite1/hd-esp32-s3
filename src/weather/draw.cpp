@@ -95,25 +95,36 @@ static void drawWeatherIcon(int x, int y, int code, float wind) {
 // One city's weather as a horizontal temperature gauge shaped like the
 // thermometer's stem (a rounded bar): "<city> <low> [==fill==] <high>", with the
 // <current> value floating just above the fill tip and a condition icon at the right.
-void drawWeatherRow(int x, int y, int w, const City &c) {
+// City-name column: names are capped at this many chars; the column is sized to
+// the longest shown name so the gauge gets the maximum remaining width.
+static const int NAME_MAX_CHARS = 12;
+static const int NAME_CHAR_W = 6;  // u8g2_font_6x10_tf is 6 px/char
+
+int weatherNameColWidth(const City *list, int count) {
+  int maxChars = 0;
+  for (int i = 0; i < count; i++) {
+    int n = (int)strlen(list[i].name);
+    if (n > NAME_MAX_CHARS) n = NAME_MAX_CHARS;
+    if (n > maxChars) maxChars = n;
+  }
+  return maxChars * NAME_CHAR_W;
+}
+
+void drawWeatherRow(int x, int y, int w, const City &c, int nameW) {
   int base = y + 21;  // baseline for the city/low/high text and the bar's bottom
 
-  // Right-pack the readout (icon | high | gauge | low) into a compact cluster, so
-  // the city name gets the rest of the row on the left.
+  // The name column has a shared width (so gauges align); the gauge then fills
+  // all the space between the low number and the high number.
   int iconSz = 16;
   int iconX = x + w - iconSz;
-  int highX = iconX - 16;          // <high> sits just left of the icon
-  int gaugeW = 30;                 // compact gauge
-  int barX = highX - 3 - gaugeW;   // gauge ends a few px before <high>
-  int lowX = barX - 18;            // <low> sits just left of the gauge
+  int highX = iconX - 16;        // <high> sits just left of the icon
+  int lowX = x + nameW + 6;      // <low> sits just right of the shared name column
+  int barX = lowX + 16;          // gauge starts after the low number
 
-  // City name fills the space left of <low>, truncated so it never overruns it.
+  // City name, capped at the limit (fits in nameW, sized from the longest name).
   u8g2->setFont(u8g2_font_6x10_tf);  // city name a bit larger than the values
-  int maxChars = (lowX - 4 - x) / 6;  // 6x10 is 6 px/char
-  if (maxChars < 1) maxChars = 1;
-  char nm[28];
-  if (maxChars > (int)sizeof(nm) - 1) maxChars = sizeof(nm) - 1;
-  snprintf(nm, sizeof(nm), "%.*s", maxChars, c.name);
+  char nm[NAME_MAX_CHARS + 1];
+  snprintf(nm, sizeof(nm), "%.*s", NAME_MAX_CHARS, c.name);
   u8g2->drawStr(x, base, nm);
 
   u8g2->setFont(u8g2_font_5x7_tf);   // low/high/current values + bar stay small
@@ -130,7 +141,8 @@ void drawWeatherRow(int x, int y, int w, const City &c) {
 
   int barH = 7;
   int barY = base - barH;
-  int barW = gaugeW;
+  int barW = highX - 6 - barX;  // as wide as possible up to <high>
+  if (barW < 8) barW = 8;
   u8g2->drawRFrame(barX, barY, barW, barH, barH / 2);
 
   // Fill from the left edge to where <current> falls between <low> and <high>.

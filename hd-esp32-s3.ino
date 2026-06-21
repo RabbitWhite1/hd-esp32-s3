@@ -244,8 +244,9 @@ void drawOverview(int mx, int lineW) {
   // spaced wider to fill the larger band down to the y=172 divider.
   int wy = 90;
   int shown = weatherCityCount() < weatherShownMax() ? weatherCityCount() : weatherShownMax();
+  int nameW = weatherNameColWidth(cities, shown);  // align every gauge to the longest name
   for (int i = 0; i < shown; i++) {
-    drawWeatherRow(mx, wy, 172, cities[i]);
+    drawWeatherRow(mx, wy, 172, cities[i], nameW);
     wy += 36;
   }
 
