@@ -195,25 +195,25 @@ static void handleRoot() {
     "<title>hd panel</title>";
   html += cssLink("/bootstrap.css");
   html +=
-    "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:4rem}"
+    "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:7rem}"
     "@media(max-width:767px){.sidenav{position:static!important}}</style>"
     "</head><body class='bg-body-tertiary'>"
     "<div id='app' class='container pb-4' style='max-width:980px'>"
-    // Sticky title bar: stays pinned at the top while the page scrolls.
-    "<div class='sticky-top bg-body-tertiary py-3 mb-3 border-bottom'>"
-    "<h1 class='h3 m-0'>hd panel</h1></div>"
-    // Two top-level tabs: Dashboard (live data) and Configuration (settings).
-    "<ul class='nav nav-tabs mb-3' id='maintabs' role='tablist'>"
+    // Sticky header: the title + the two top-level tabs (Dashboard / Configuration)
+    // stay pinned at the top together while the page scrolls.
+    "<div class='sticky-top bg-body-tertiary pt-3 mb-3'>"
+    "<h1 class='h3 mb-2'>hd panel</h1>"
+    "<ul class='nav nav-tabs' id='maintabs' role='tablist'>"
     "<li class='nav-item'><button class='nav-link active' type='button' role='tab' "
     "data-bs-toggle='tab' data-bs-target='#tab-dashboard'>Dashboard</button></li>"
     "<li class='nav-item'><button class='nav-link' type='button' role='tab' "
     "data-bs-toggle='tab' data-bs-target='#tab-config'>Configuration</button></li>"
-    "</ul><div class='tab-content'>"
+    "</ul></div><div class='tab-content'>"
     // --- Dashboard tab: Now + To-do ---
     "<div class='tab-pane fade show active' id='tab-dashboard' role='tabpanel'>"
     "<div class='row g-4'>"
     "<div class='col-12 col-md-3'>"
-    "<nav class='sidenav nav flex-column position-sticky' style='top:4.5rem'>"
+    "<nav class='sidenav nav flex-column position-sticky' style='top:7rem'>"
     "<a class='nav-link' href='#now'>Now</a>"
     "<a class='nav-link' href='#todo'>To-do</a>"
     "</nav></div>"
@@ -279,7 +279,7 @@ static void handleRoot() {
           "<div class='tab-pane fade' id='tab-config' role='tabpanel'>"
           "<div class='row g-4'>"
           "<div class='col-12 col-md-3'>"
-          "<nav class='sidenav nav flex-column position-sticky' style='top:4.5rem'>"
+          "<nav class='sidenav nav flex-column position-sticky' style='top:7rem'>"
           "<a class='nav-link' href='#gdoc'>Google Doc</a>"
           "<a class='nav-link' href='#tz'>Time zones</a>"
           "<a class='nav-link' href='#weather'>Weather cities</a>"
