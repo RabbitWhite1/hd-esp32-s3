@@ -393,7 +393,6 @@ void setup() {
   // each boot. The line after it re-seeds a network so the freshly wiped card
   // isn't left empty; harmless to keep (or remove together).
   // sdFormat();
-  // wifiStoreNetwork("2493-26APR03", "greenG2493");
   // ===========================================================================
 
   // Settings that come from config (esp32.json) need configBegin() first (done above).
