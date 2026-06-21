@@ -21,10 +21,14 @@ void claudeUsageSetSessionKey(const String &key);  // pass "" to keep the curren
 // (and the org id from lastActiveOrg, if present). Returns true if a session key
 // was found. Convenience for pasting the full cookie instead of the two fields.
 bool claudeUsageSetFromCookie(const String &cookie);
+
+// Persistence of the org id + session key in the shared config (esp32.json).
+void claudeUsageLoad();  // restore org id + key from config (call after configBegin)
+void claudeUsageSave();  // write the current org id + key to config + persist
 const String &claudeUsageOrgId();
 const String &claudeUsageSessionKey();  // current session key ("" if unset)
 bool claudeUsageHasKey();  // true once a non-empty session key has been set
 
-// Auto-refresh interval, in minutes (backed by the shared esp32.conf store).
+// Auto-refresh interval, in minutes (backed by the shared esp32.json store).
 int claudeUsageIntervalMin();             // configured interval (>= 1; default 30)
 void claudeUsageSetIntervalMin(int minutes);  // clamp to >= 1, then persist to config

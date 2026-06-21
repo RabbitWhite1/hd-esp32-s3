@@ -3,7 +3,7 @@
 
 #include "weather.h"
 #include "../wifi_net/wifi_net.h"
-#include "../sdcard/sdcard.h"  // persist the configured cities to /sdcard/cities.txt
+#include "../config/config.h"  // persist the configured cities in esp32.json
 #include "../logging/logging.h"
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
@@ -199,44 +199,32 @@ bool weatherRemoveCity(int idx) {
   return true;
 }
 
-// Persisted as one "name<TAB>lat<TAB>lon<TAB>label" line per city. (Files
-// written before the label existed have only three fields and still load.)
+// Persisted as a "cities" JSON array in the shared config, one object per city
+// ({name, lat, lon, label}).
+static const char *CITIES_KEY = "cities";
+
 static void weatherSaveCities() {
-  String out;
+  JsonArray arr = configDoc()[CITIES_KEY].to<JsonArray>();  // replaces any existing array
   for (int i = 0; i < cityCount; i++) {
-    out += cities[i].name;
-    out += '\t';
-    out += String(cities[i].lat, 4);
-    out += '\t';
-    out += String(cities[i].lon, 4);
-    out += '\t';
-    out += cities[i].label;
-    out += '\n';
+    JsonObject o = arr.add<JsonObject>();
+    o["name"] = cities[i].name;
+    o["lat"] = cities[i].lat;
+    o["lon"] = cities[i].lon;
+    o["label"] = cities[i].label;
   }
-  if (sdWriteText("cities.txt", out)) logInfo("Cities saved to SD (%d)", cityCount);
+  if (configSave()) logInfo("Cities saved to config (%d)", cityCount);
 }
 
 void weatherLoadCities() {
   cityCount = 0;
-  String data = sdReadText("cities.txt");
-  int start = 0;
-  while (start < (int)data.length() && cityCount < MAX_CITIES) {
-    int nl = data.indexOf('\n', start);
-    String line = (nl < 0) ? data.substring(start) : data.substring(start, nl);
-    int t1 = line.indexOf('\t');
-    int t2 = (t1 >= 0) ? line.indexOf('\t', t1 + 1) : -1;
-    int t3 = (t2 >= 0) ? line.indexOf('\t', t2 + 1) : -1;
-    if (t1 > 0 && t2 > t1) {
-      String nm = line.substring(0, t1);
-      float lat = line.substring(t1 + 1, t2).toFloat();
-      float lon = ((t3 >= 0) ? line.substring(t2 + 1, t3) : line.substring(t2 + 1)).toFloat();
-      String label = (t3 >= 0) ? line.substring(t3 + 1) : String("");
-      nm.trim();
-      label.trim();
-      if (nm.length()) initCity(cities[cityCount++], nm.c_str(), label.c_str(), lat, lon);
-    }
-    if (nl < 0) break;
-    start = nl + 1;
+  JsonArrayConst arr = configDoc()[CITIES_KEY].as<JsonArrayConst>();
+  for (JsonObjectConst o : arr) {
+    if (cityCount >= MAX_CITIES) break;
+    const char *nm = o["name"] | "";
+    float lat = o["lat"] | NAN;
+    float lon = o["lon"] | NAN;
+    const char *label = o["label"] | "";
+    if (nm[0] && !isnan(lat) && !isnan(lon)) initCity(cities[cityCount++], nm, label, lat, lon);
   }
   if (cityCount == 0) {
     // Seed the original defaults so a fresh device still shows weather.
@@ -245,6 +233,6 @@ void weatherLoadCities() {
       initCity(cities[cityCount++], "New York", "New York, New York, United States", 40.71f, -74.01f);
     logInfo("Cities: seeded defaults (%d)", cityCount);
   } else {
-    logInfo("Cities loaded from SD (%d)", cityCount);
+    logInfo("Cities loaded from config (%d)", cityCount);
   }
 }

@@ -3,8 +3,7 @@
 
 #include "gdoc.h"
 #include "../wifi_net/wifi_net.h"
-#include "../sdcard/sdcard.h"
-#include "../config/config.h"  // refresh interval persisted in esp32.conf
+#include "../config/config.h"  // URL + refresh interval persisted in esp32.json
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -13,7 +12,8 @@
 // 307-redirects to a signed googleusercontent.com host, so redirect-following must
 // be enabled. The doc must stay shared as "anyone with the link can view". No URL
 // is baked into the firmware — it is set at runtime via the web UI and persisted
-// to /sdcard/gdoc_url.txt; empty until then, so gdocUpdate() is a no-op.
+// in the shared config (esp32.json, key gdoc_url); empty until then, so
+// gdocUpdate() is a no-op.
 static String docUrl = "";
 
 static const int MAX_DOC_LINES = 12;
@@ -65,15 +65,18 @@ void gdocSetUrl(const String &url) {
 const String &gdocUrl() {
   return docUrl;
 }
+static const char *GDOC_URL_KEY = "gdoc_url";
+
 void gdocSaveUrl() {
-  if (sdWriteText("gdoc_url.txt", docUrl)) logInfo("gdoc URL saved to SD");
+  configSet(GDOC_URL_KEY, docUrl);
+  if (configSave()) logInfo("gdoc URL saved to config");
 }
 void gdocLoadUrl() {
-  String u = sdReadText("gdoc_url.txt");
+  String u = configGet(GDOC_URL_KEY);
   u.trim();
   if (u.length()) {
     gdocSetUrl(u);
-    logInfo("gdoc URL loaded from SD");
+    logInfo("gdoc URL loaded from config");
   }
 }
 

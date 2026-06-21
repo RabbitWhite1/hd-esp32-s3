@@ -7,7 +7,7 @@
 // Weather backend: per-city current temperature + daily hi/lo from Open-Meteo.
 // The forecast API takes coordinates, so a city is added by name (resolved to
 // lat/lon once via Open-Meteo's geocoding API) and the resolved coordinates are
-// persisted to /sdcard/cities.txt.
+// persisted in the shared config (esp32.json) as a "cities" array.
 struct City {
   char name[32];   // city name only (drawn on the LCD, where width is tight)
   char label[48];  // "City, Region, Country" (shown in the web UI list)
@@ -24,7 +24,7 @@ const char *weatherCityName(int i);  // full "City, Region, Country" label of ci
 
 void weatherUpdateAll();  // refresh every city; a city keeps its old fields on failure
 
-// City configuration (geocode a name -> coordinates, persisted to SD).
-void weatherLoadCities();   // restore from /sdcard/cities.txt, or seed defaults (call after sdBegin)
+// City configuration (geocode a name -> coordinates, persisted in config).
+void weatherLoadCities();   // restore from config, or seed defaults (call after configBegin)
 bool weatherAddCity(const String &query, String &resolvedOut);  // geocode + append + persist; resolvedOut gets a human-readable result/error
 bool weatherRemoveCity(int idx);  // remove city idx + persist

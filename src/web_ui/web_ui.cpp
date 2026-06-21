@@ -291,7 +291,7 @@ static void handleRoot() {
 
   // Google Doc URL shown in the Notes box (paste a normal Docs/sharing link; it's
   // reduced to the base doc URL and the txt export is fetched in code). Persisted
-  // to /sdcard/gdoc_url.txt.
+  // in config (esp32.json).
   html += cardOpen("gdoc", "Google Doc", saveBtn("gdocform"));
   html += "<form id='gdocform' action='/gdoc' method='POST'>"
           "<label class='form-label'>Doc URL</label>"
@@ -302,7 +302,7 @@ static void handleRoot() {
 
   // Time zones: two dropdowns (primary shown first, secondary in parentheses on
   // the LCD). Each option is an abbreviation + a famous city in that zone. The
-  // selection is persisted to /sdcard/tz.txt.
+  // selection is persisted in config (esp32.json).
   html += cardOpen("tz", "Time zones", saveBtn("tzform"));
   html += "<form id='tzform' action='/tz' method='POST'><div class='row g-3'>";
   for (int sel = 0; sel < 2; sel++) {
@@ -326,8 +326,8 @@ static void handleRoot() {
   html += "</div></form>";
   html += cardClose;
 
-  // Weather cities: add by name (geocoded to coordinates), remove, persisted to
-  // /sdcard/cities.txt. The forecast API uses the resolved lat/lon. One per row.
+  // Weather cities: add by name (geocoded to coordinates), remove, persisted in
+  // config (esp32.json). The forecast API uses the resolved lat/lon. One per row.
   html += cardOpen("weather", "Weather cities");
   html += "<div class='row g-2 mb-3'>";
   if (weatherCityCount() == 0) html += "<div class='col-12 text-muted'>(none)</div>";
@@ -355,7 +355,7 @@ static void handleRoot() {
   }
   html += cardClose;
 
-  // Auto-refresh intervals (minutes), persisted to esp32.conf. Each input shows a
+  // Auto-refresh intervals (minutes), persisted to esp32.json. Each input shows a
   // non-editable light-grey "min" suffix.
   html += cardOpen("intervals", "Refresh intervals", saveBtn("intervalsform"));
   html += "<form id='intervalsform' action='/intervals' method='POST' class='row g-3'>"
@@ -731,6 +731,7 @@ static void handleClaude() {
       respond(false, "No sessionKey found in the pasted cookie");
       return;
     }
+    claudeUsageSave();  // persist the new org id + key to config
     logInfo("Claude credentials updated from pasted cookie via web UI");
     claudeUsageUpdate();
     respond(true, "Claude credentials saved from cookie");
@@ -738,6 +739,7 @@ static void handleClaude() {
   }
   if (server.hasArg("org")) claudeUsageSetOrgId(server.arg("org"));
   if (server.hasArg("key")) claudeUsageSetSessionKey(server.arg("key"));  // empty -> keep current
+  claudeUsageSave();  // persist the new org id + key to config
   logInfo("Claude credentials updated via web UI");
   claudeUsageUpdate();  // refresh now so the result shows on the LCD immediately
   respond(true, "Claude credentials saved");
@@ -749,7 +751,7 @@ static void handleGdoc() {
     return;
   }
   gdocSetUrl(server.arg("url"));  // normalizes a Docs link to the txt export
-  gdocSaveUrl();                  // persist to /sdcard/gdoc_url.txt
+  gdocSaveUrl();                  // persist to config (esp32.json)
   logInfo("gdoc URL updated via web UI");
   gdocUpdate();  // refresh the Notes box now
   respond(true, "Google Doc URL saved");
@@ -759,7 +761,7 @@ static void handleTz() {
   int primary = server.hasArg("primary") ? server.arg("primary").toInt() : timePrimaryZone();
   int secondary = server.hasArg("secondary") ? server.arg("secondary").toInt() : timeSecondaryZone();
   timeSetZones(primary, secondary);  // out-of-range values are ignored
-  timeSaveZones();                   // persist to /sdcard/tz.txt
+  timeSaveZones();                   // persist to config (esp32.json)
   logInfo("Time zones updated via web UI: %s / %s",
           timeZoneLabel(timePrimaryZone()), timeZoneLabel(timeSecondaryZone()));
   respond(true, "Time zones saved");

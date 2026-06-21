@@ -16,7 +16,7 @@
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
 #include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
-#include "src/config/config.h"               // configBegin — small persistent key/value settings (esp32.conf)
+#include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
 #include "src/history/history.h"             // historyAdd — temp/humidity ring buffer + CSV logging
 
@@ -46,7 +46,7 @@ const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humid
 const unsigned long HISTORY_INTERVAL = 60UL * 1000;            // append one temp/humidity sample to the yearly CSV per minute
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
 // Claude-usage and Google-Doc refresh intervals are user-configurable (minutes)
-// and live in esp32.conf — see claudeUsageIntervalMin() / gdocIntervalMin().
+// and live in esp32.json — see claudeUsageIntervalMin() / gdocIntervalMin().
 unsigned long lastSample = 0;
 unsigned long lastHistory = 0;
 unsigned long lastWeather = 0;
@@ -57,9 +57,6 @@ unsigned long sampleCount = 0;
 // latest sensor readings cached for redraw
 float lastTemp = NAN, lastHum = NAN;
 bool sensorOK = false;
-
-// Last Claude org+key pair written to SD, so the loop only rewrites on change.
-String lastSavedClaude = "";
 
 // KEY debounce state
 int keyPrev = HIGH;
@@ -366,24 +363,6 @@ void drawScreen() {
   u8g2->sendBuffer();
 }
 
-// ---------- Claude credential persistence (one id-key pair on the SD card) ----------
-// Stored as "<orgId>\n<sessionKey>"; a new pair overwrites the old one.
-bool saveClaudeCreds() {
-  return sdWriteText("claude.txt", claudeUsageOrgId() + "\n" + claudeUsageSessionKey());
-}
-void loadClaudeCreds() {
-  String data = sdReadText("claude.txt");
-  if (data.length() == 0) return;
-  int nl = data.indexOf('\n');
-  String org = (nl < 0) ? data : data.substring(0, nl);
-  String key = (nl < 0) ? String("") : data.substring(nl + 1);
-  org.trim();
-  key.trim();
-  if (org.length()) claudeUsageSetOrgId(org);
-  if (key.length()) claudeUsageSetSessionKey(key);
-  logInfo("Claude creds loaded from SD");
-}
-
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -404,20 +383,21 @@ void setup() {
   // microSD: mount, then load persisted creds + saved Wi-Fi networks BEFORE
   // connecting, so wifiBegin() can try the saved networks.
   sdBegin();
-  configBegin();   // load small persistent settings (esp32.conf) before features read them
+  configBegin();   // load small persistent settings (esp32.json) before features read them
   historyBegin();  // ensure /sdcard/sensor_data exists for the temp/humidity logs
 
   // ============================ ONE-TIME SD FORMAT ============================
   // Wipes the card to a fresh FAT filesystem on EVERY boot — here only to prepare
   // a raw/unreadable card. >>> COMMENT OUT the sdFormat() line below <<< once the
-  // card is prepared, otherwise the saved Claude key + Wi-Fi list are erased each
-  // boot. The two lines after it re-persist what we loaded above so the freshly
-  // wiped card isn't left empty; they are harmless to keep (or remove together).
+  // card is prepared, otherwise the persisted settings + Wi-Fi list are erased
+  // each boot. The line after it re-seeds a network so the freshly wiped card
+  // isn't left empty; harmless to keep (or remove together).
   // sdFormat();
   // wifiStoreNetwork("2493-26APR03", "greenG2493");
   // ===========================================================================
 
-  loadClaudeCreds();
+  // Settings that come from config (esp32.json) need configBegin() first (done above).
+  claudeUsageLoad();  // restore the Claude org id + session key from config
   wifiLoadNetworks();
   gdocLoadUrl();  // restore the configured Google Doc URL before the first gdocUpdate()
   timeLoadZones();  // restore the selected primary/secondary time zones before timeBegin()
@@ -522,13 +502,6 @@ void loop() {
   if (now - lastGdoc >= gdocIntervalMin() * 60UL * 1000UL) {
     lastGdoc = now;
     gdocUpdate();
-  }
-
-  // Persist the Claude org id + session key to SD once provided, rewriting only
-  // when it changes. Exactly one pair is kept on the card (new overwrites old).
-  if (claudeUsageHasKey()) {
-    String cur = claudeUsageOrgId() + "\n" + claudeUsageSessionKey();
-    if (cur != lastSavedClaude && saveClaudeCreds()) lastSavedClaude = cur;
   }
 
   if (now - lastSample >= SAMPLE_INTERVAL) {

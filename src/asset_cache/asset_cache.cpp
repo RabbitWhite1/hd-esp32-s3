@@ -13,14 +13,16 @@
 
 static const long ASSET_TTL_SEC = 7L * 24 * 3600;  // 1 week
 
+// Cached copies live under /sdcard/assets/; the web routes keep their short
+// "/bootstrap.css" form (the route is unrelated to the on-card path).
 static const CachedAsset ASSETS[] = {
-  {"/bootstrap.css", "bootstrap.css",
+  {"/bootstrap.css", "assets/bootstrap.css",
    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css", "text/css"},
-  {"/bootstrap.js", "bootstrap.js",
+  {"/bootstrap.js", "assets/bootstrap.js",
    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js", "application/javascript"},
-  {"/sortable.js", "sortable.js",
+  {"/sortable.js", "assets/sortable.js",
    "https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js", "application/javascript"},
-  {"/chart.js", "chart.js",
+  {"/chart.js", "assets/chart.js",
    "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js", "application/javascript"},
 };
 static const int ASSET_COUNT = sizeof(ASSETS) / sizeof(ASSETS[0]);
@@ -143,6 +145,8 @@ void assetsEnsureFresh() {
     logInfo("Asset cache: offline, serving whatever is already cached");
     return;
   }
+  String dir = sdPath("assets");
+  if (dir.length()) mkdir(dir.c_str(), 0777);  // ensure /sdcard/assets exists (harmless if it does)
   for (int i = 0; i < ASSET_COUNT; i++) {
     if (needsRefresh(ASSETS[i])) downloadAsset(ASSETS[i]);
   }

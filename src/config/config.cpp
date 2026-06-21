@@ -2,88 +2,61 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #include "config.h"
-#include "../sdcard/sdcard.h"  // the store lives in /sdcard/esp32.conf
+#include "../sdcard/sdcard.h"  // the store lives in /sdcard/esp32.json
 #include "../logging/logging.h"
 
-static const char *CONF_FILE = "esp32.conf";
-static const int MAX_ENTRIES = 16;
+static const char *CONF_FILE = "esp32.json";
 
-struct Entry {
-  String key;
-  String value;
-};
-static Entry entries[MAX_ENTRIES];
-static int entryCount = 0;
+// The whole store is a single JSON object held in RAM; the document IS the dict.
+// Keys passed to get/set must be string literals with program-long lifetime
+// (ArduinoJson links, not copies, const char* keys) - all callers use statics.
+static JsonDocument doc;
 
-static int findKey(const char *key) {
-  for (int i = 0; i < entryCount; i++)
-    if (entries[i].key == key) return i;
-  return -1;
+static int keyCount() {
+  return doc.is<JsonObject>() ? (int)doc.as<JsonObject>().size() : 0;
 }
 
 void configBegin() {
-  entryCount = 0;
+  doc.clear();
   String data = sdReadText(CONF_FILE);
-  int start = 0;
-  while (start < (int)data.length() && entryCount < MAX_ENTRIES) {
-    int nl = data.indexOf('\n', start);
-    String line = (nl < 0) ? data.substring(start) : data.substring(start, nl);
-    int eq = line.indexOf('=');
-    if (eq > 0) {
-      String k = line.substring(0, eq);
-      String v = line.substring(eq + 1);
-      k.trim();
-      v.trim();
-      if (k.length()) {
-        entries[entryCount].key = k;
-        entries[entryCount].value = v;
-        entryCount++;
-      }
+  if (data.length()) {
+    DeserializationError err = deserializeJson(doc, data);
+    if (err) {
+      // A truncated/corrupt file (e.g. power loss mid-write) parses as a whole,
+      // so we lose everything and fall back to defaults rather than one bad line.
+      logWarn("Config parse failed (%s); starting empty", err.c_str());
+      doc.clear();
     }
-    if (nl < 0) break;
-    start = nl + 1;
   }
-  logInfo("Config loaded from SD (%d entries)", entryCount);
+  logInfo("Config loaded from SD (%d keys)", keyCount());
 }
 
 String configGet(const char *key, const String &def) {
-  int i = findKey(key);
-  return i < 0 ? def : entries[i].value;
+  JsonVariantConst v = doc[key];
+  return v.isNull() ? def : v.as<String>();
 }
 
 long configGetInt(const char *key, long def) {
-  int i = findKey(key);
-  return i < 0 ? def : entries[i].value.toInt();
+  JsonVariantConst v = doc[key];
+  return v.isNull() ? def : v.as<long>();
 }
 
 void configSet(const char *key, const String &value) {
-  int i = findKey(key);
-  if (i >= 0) {
-    entries[i].value = value;
-    return;
-  }
-  if (entryCount >= MAX_ENTRIES) {
-    logWarn("Config full (%d), dropping key %s", MAX_ENTRIES, key);
-    return;
-  }
-  entries[entryCount].key = key;
-  entries[entryCount].value = value;
-  entryCount++;
+  doc[key] = value;  // value content is copied into the document pool
 }
 
 void configSetInt(const char *key, long value) {
-  configSet(key, String(value));
+  doc[key] = value;
 }
 
 bool configSave() {
   String out;
-  for (int i = 0; i < entryCount; i++) {
-    out += entries[i].key;
-    out += '=';
-    out += entries[i].value;
-    out += '\n';
-  }
+  serializeJsonPretty(doc, out);
   bool ok = sdWriteText(CONF_FILE, out);
-  if (ok) logInfo("Config saved to SD (%d entries)", entryCount);
+  if (ok) logInfo("Config saved to SD (%d keys)", keyCount());
   return ok;
+}
+
+JsonDocument &configDoc() {
+  return doc;
 }

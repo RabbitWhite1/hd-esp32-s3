@@ -3,7 +3,7 @@
 
 #include "claude_usage.h"
 #include "../wifi_net/wifi_net.h"
-#include "../config/config.h"  // refresh interval persisted in esp32.conf
+#include "../config/config.h"  // refresh interval persisted in esp32.json
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -111,6 +111,26 @@ bool claudeUsageSetFromCookie(const String &cookie) {
     return true;
   }
   return false;
+}
+
+// Org id + session key are persisted in the shared config store (esp32.json).
+// The key lives on the SD card in plaintext - acceptable here since the device
+// is physically trusted.
+static const char *CLAUDE_ORG_KEY = "claude_org";
+static const char *CLAUDE_SESSION_KEY = "claude_key";
+
+void claudeUsageLoad() {
+  String o = configGet(CLAUDE_ORG_KEY);
+  String k = configGet(CLAUDE_SESSION_KEY);
+  if (o.length() > 0) orgId = o;
+  if (k.length() > 0) sessionKey = k;
+  logInfo("Claude creds loaded from config (%s)", claudeUsageHasKey() ? "key set" : "no key");
+}
+
+void claudeUsageSave() {
+  configSet(CLAUDE_ORG_KEY, orgId);
+  configSet(CLAUDE_SESSION_KEY, sessionKey);
+  if (configSave()) logInfo("Claude creds saved to config");
 }
 time_t claudeUsageAsOf() {
   return asOf;

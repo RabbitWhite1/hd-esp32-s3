@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #include "time_sync.h"
-#include "../sdcard/sdcard.h"  // persist the zone selection to /sdcard/tz.txt
+#include "../config/config.h"  // persist the zone selection in esp32.json
 #include "../logging/logging.h"
 #include <time.h>
 
@@ -117,25 +117,22 @@ void timeSetZones(int primary, int secondary) {
   applyPrimaryEnv();  // a changed primary takes effect immediately
 }
 
-// Persisted as two lines (primary TZ, then secondary TZ). Storing the POSIX
-// strings rather than indices keeps the file valid if the table is reordered.
+// Persisted as two config keys holding the POSIX TZ strings (not indices), so the
+// selection stays valid if the zone table is reordered.
+static const char *TZ_PRIMARY_KEY = "tz_primary";
+static const char *TZ_SECONDARY_KEY = "tz_secondary";
+
 void timeSaveZones() {
-  String s = String(ZONES[g_primary].tz) + "\n" + ZONES[g_secondary].tz;
-  if (sdWriteText("tz.txt", s)) logInfo("Time zones saved to SD");
+  configSet(TZ_PRIMARY_KEY, ZONES[g_primary].tz);
+  configSet(TZ_SECONDARY_KEY, ZONES[g_secondary].tz);
+  if (configSave()) logInfo("Time zones saved to config");
 }
 
 void timeLoadZones() {
-  String data = sdReadText("tz.txt");
-  if (data.length() == 0) return;
-  int nl = data.indexOf('\n');
-  String p = (nl < 0) ? data : data.substring(0, nl);
-  String e = (nl < 0) ? String("") : data.substring(nl + 1);
-  p.trim();
-  e.trim();
-  int pi = findZoneByTz(p);
-  int ei = findZoneByTz(e);
+  int pi = findZoneByTz(configGet(TZ_PRIMARY_KEY));
+  int ei = findZoneByTz(configGet(TZ_SECONDARY_KEY));
   if (pi >= 0) g_primary = pi;
   if (ei >= 0) g_secondary = ei;
   applyPrimaryEnv();
-  logInfo("Time zones loaded from SD (%s / %s)", ZONES[g_primary].label, ZONES[g_secondary].label);
+  logInfo("Time zones loaded from config (%s / %s)", ZONES[g_primary].label, ZONES[g_secondary].label);
 }

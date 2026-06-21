@@ -16,5 +16,5 @@ const char *timeZoneLabel(int i); // "PST - Los Angeles" ("" if out of range)
 int timePrimaryZone();            // index of the primary (main) zone
 int timeSecondaryZone();          // index of the secondary (parenthesized) zone
 void timeSetZones(int primary, int secondary);  // apply (out-of-range values are ignored)
-void timeLoadZones();             // restore from /sdcard/tz.txt (call after sdBegin, before timeBegin)
-void timeSaveZones();             // persist the current selection to /sdcard/tz.txt
+void timeLoadZones();             // restore from config (call after configBegin, before timeBegin)
+void timeSaveZones();             // persist the current selection to config (esp32.json)
