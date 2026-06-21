@@ -44,7 +44,7 @@ static void initCity(City &c, const char *name, const char *label, float lat, fl
   c.wind = 0.0f;
 }
 
-static void weatherSaveCities();  // defined below
+static bool weatherSaveCities();  // defined below
 
 static bool fetchWeather(City &c) {
   if (!wifiConnected()) return false;
@@ -183,7 +183,11 @@ bool weatherAddCity(const String &query, String &resolvedOut) {
                  (country.length() ? (", " + country) : String(""));
   initCity(cities[cityCount], nm.c_str(), label.c_str(), lat, lon);
   cityCount++;
-  weatherSaveCities();
+  if (!weatherSaveCities()) {  // couldn't persist (e.g. no SD) -> roll back the add
+    cityCount--;
+    resolvedOut = "could not save (SD card?)";
+    return false;
+  }
   fetchWeather(cities[cityCount - 1]);  // populate the reading right away
   resolvedOut = label + " (" + String(lat, 2) + ", " + String(lon, 2) + ")";
   logInfo("City added: %s -> %.2f,%.2f", nm.c_str(), lat, lon);
@@ -194,16 +198,16 @@ bool weatherRemoveCity(int idx) {
   if (idx < 0 || idx >= cityCount) return false;
   for (int j = idx; j < cityCount - 1; j++) cities[j] = cities[j + 1];
   cityCount--;
-  weatherSaveCities();
-  logInfo("City %d removed (%d left)", idx, cityCount);
-  return true;
+  bool ok = weatherSaveCities();
+  logInfo("City %d removed (%d left) -> %s", idx, cityCount, ok ? "saved" : "save failed");
+  return ok;
 }
 
 // Persisted as a "cities" JSON array in the shared config, one object per city
 // ({name, lat, lon, label}).
 static const char *CITIES_KEY = "cities";
 
-static void weatherSaveCities() {
+static bool weatherSaveCities() {
   JsonArray arr = configDoc()[CITIES_KEY].to<JsonArray>();  // replaces any existing array
   for (int i = 0; i < cityCount; i++) {
     JsonObject o = arr.add<JsonObject>();
@@ -212,7 +216,10 @@ static void weatherSaveCities() {
     o["lon"] = cities[i].lon;
     o["label"] = cities[i].label;
   }
-  if (configSave()) logInfo("Cities saved to config (%d)", cityCount);
+  bool ok = configSave();
+  if (ok) logInfo("Cities saved to config (%d)", cityCount);
+  else logError("Cities save failed (SD card?)");
+  return ok;
 }
 
 void weatherLoadCities() {

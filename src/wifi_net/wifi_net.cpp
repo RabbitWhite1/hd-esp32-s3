@@ -220,7 +220,7 @@ void wifiLoadNetworks() {
   logInfo("WiFi: loaded %d saved network(s)", netCount);
 }
 
-void wifiSaveNetworks() {
+bool wifiSaveNetworks() {
   String out;
   for (int i = 0; i < netCount; i++) {
     out += nets[i].ssid;
@@ -228,30 +228,33 @@ void wifiSaveNetworks() {
     out += nets[i].pass;
     out += '\n';
   }
-  if (sdWriteText("wifi.txt", out)) logInfo("WiFi: saved %d network(s)", netCount);
-  orderDirty = false;
+  bool ok = sdWriteText("wifi.txt", out);
+  if (ok) {
+    logInfo("WiFi: saved %d network(s)", netCount);
+    orderDirty = false;  // only clear the dirty flag once it's actually on the card
+  } else {
+    logError("WiFi: save failed (SD card?)");
+  }
+  return ok;
 }
 
 // Insert or update one network by SSID and persist the list. Dedups: an existing
 // SSID's password is overwritten in place; the oldest entry is dropped when full.
-static void upsertNetwork(const String &s, const String &p) {
+static bool upsertNetwork(const String &s, const String &p) {
   int idx = -1;
   for (int i = 0; i < netCount; i++)
     if (nets[i].ssid == s) { idx = i; break; }
   if (idx < 0) idx = (netCount < MAX_NETS) ? netCount++ : MAX_NETS - 1;
   nets[idx].ssid = s;
   nets[idx].pass = p;
-  wifiSaveNetworks();
+  return wifiSaveNetworks();
 }
 
 bool wifiStoreNetwork(const String &s, const String &p) {
   if (s.length() == 0) return false;
-  upsertNetwork(s, p);  // dedup by SSID; no connectivity test
-  logInfo("WiFi network stored (unverified): %s", s.c_str());
-  // Dump the whole file back so it's visible on the serial monitor.
-  String all = sdReadText("wifi.txt");
-  logInfo("wifi.txt now (%d bytes):\n%s", all.length(), all.c_str());
-  return true;
+  bool ok = upsertNetwork(s, p);  // dedup by SSID; no connectivity test
+  logInfo("WiFi network stored (unverified): %s -> %s", s.c_str(), ok ? "saved" : "save failed");
+  return ok;
 }
 
 bool wifiAddNetwork(const String &s, const String &p) {
@@ -263,11 +266,11 @@ bool wifiAddNetwork(const String &s, const String &p) {
     wifiBegin();  // restore a known-good network now (bypassing the 30 s throttle)
     return false;
   }
-  upsertNetwork(s, p);
+  bool ok = upsertNetwork(s, p);  // connected; now persist (may fail if no SD)
   startMdns();  // re-advertise on the new connection
   if (apMode) wifiRequestStopAP(3000);  // configured via the setup AP; tear it down once the reply flushes
-  logInfo("WiFi network saved + connected: %s", s.c_str());
-  return true;
+  logInfo("WiFi network connected + %s: %s", ok ? "saved" : "SAVE FAILED", s.c_str());
+  return ok;
 }
 
 bool wifiRemoveNetwork(const String &s) {
@@ -275,9 +278,9 @@ bool wifiRemoveNetwork(const String &s) {
     if (nets[i].ssid == s) {
       for (int j = i; j < netCount - 1; j++) nets[j] = nets[j + 1];
       netCount--;
-      wifiSaveNetworks();
-      logInfo("WiFi network removed: %s", s.c_str());
-      return true;
+      bool ok = wifiSaveNetworks();
+      logInfo("WiFi network removed: %s -> %s", s.c_str(), ok ? "saved" : "save failed");
+      return ok;
     }
   }
   return false;

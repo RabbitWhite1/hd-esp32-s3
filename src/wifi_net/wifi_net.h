@@ -21,7 +21,7 @@ void wifiSetRedrawHook(void (*fn)());
 
 // Saved-network list (persisted to /sdcard/wifi.txt).
 void wifiLoadNetworks();     // load the saved list from SD (call before wifiBegin)
-void wifiSaveNetworks();     // re-write the saved list to SD
+bool wifiSaveNetworks();     // re-write the saved list to SD; false if the write failed (e.g. no card)
 // Try to join (ssid, pass); only on success is it added to the saved list (one
 // entry per SSID, newest password wins) and persisted. Returns whether it joined.
 bool wifiAddNetwork(const String &ssid, const String &pass);

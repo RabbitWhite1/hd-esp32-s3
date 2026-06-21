@@ -67,9 +67,12 @@ const String &gdocUrl() {
 }
 static const char *GDOC_URL_KEY = "gdoc_url";
 
-void gdocSaveUrl() {
+bool gdocSaveUrl() {
   configSet(GDOC_URL_KEY, docUrl);
-  if (configSave()) logInfo("gdoc URL saved to config");
+  bool ok = configSave();
+  if (ok) logInfo("gdoc URL saved to config");
+  else logError("gdoc URL save failed (SD card?)");
+  return ok;
 }
 void gdocLoadUrl() {
   String u = configGet(GDOC_URL_KEY);
@@ -87,10 +90,10 @@ int gdocIntervalMin() {
   long m = configGetInt(GDOC_INTERVAL_KEY, GDOC_INTERVAL_DEFAULT);
   return m < 1 ? 1 : (int)m;
 }
-void gdocSetIntervalMin(int minutes) {
+bool gdocSetIntervalMin(int minutes) {
   if (minutes < 1) minutes = 1;
   configSetInt(GDOC_INTERVAL_KEY, minutes);
-  configSave();
+  return configSave();
 }
 
 void gdocUpdate() {

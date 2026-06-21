@@ -672,9 +672,11 @@ static void handleWifi() {
     return;
   }
   if (test)
-    respond(ok, ok ? ("Connected & saved: " + s) : ("Could not connect to '" + s + "' - not saved"));
+    respond(ok, ok ? ("Connected & saved: " + s)
+                   : ("Failed: couldn't connect to '" + s + "', or couldn't save (SD card?)"));
   else
-    respond(ok, ok ? ("Saved (not tested): " + s) : "SSID required");
+    respond(ok, ok ? ("Saved (not tested): " + s)
+                   : (s.length() ? "Save failed (SD card?)" : "SSID required"));
 }
 
 static void handleWifiEdit() {
@@ -685,7 +687,7 @@ static void handleWifiEdit() {
   if (act == "del") {
     String s = wifiNetSSID(idx);  // capture the name before removal
     ok = wifiRemoveNetwork(s);
-    msg = ok ? ("Removed: " + s) : "Remove failed";
+    msg = ok ? ("Removed: " + s) : "Remove failed (SD card?)";
   } else if (act == "top") {
     // Bubble the item up to index 0, preserving the order of the rest.
     for (int k = idx; k > 0; k--) wifiMoveNetwork(k, -1);
@@ -717,9 +719,13 @@ static void handleWifiSave() {
     }
     ok = wifiApplyOrder(order, n);
   }
-  if (ok) wifiSaveNetworks();
-  logInfo("WiFi order saved via web: %s", ok ? "ok" : "rejected");
-  respond(ok, ok ? "Priority order saved" : "Reorder failed");
+  if (!ok) {
+    respond(false, "Reorder failed");
+    return;
+  }
+  bool saved = wifiSaveNetworks();
+  logInfo("WiFi order save via web: %s", saved ? "ok" : "failed");
+  respond(saved, saved ? "Priority order saved" : "Save failed (SD card?)");
 }
 
 static void handleClaude() {
@@ -731,18 +737,18 @@ static void handleClaude() {
       respond(false, "No sessionKey found in the pasted cookie");
       return;
     }
-    claudeUsageSave();  // persist the new org id + key to config
+    bool saved = claudeUsageSave();  // persist the new org id + key to config
     logInfo("Claude credentials updated from pasted cookie via web UI");
     claudeUsageUpdate();
-    respond(true, "Claude credentials saved from cookie");
+    respond(saved, saved ? "Claude credentials saved from cookie" : "Save failed (SD card?)");
     return;
   }
   if (server.hasArg("org")) claudeUsageSetOrgId(server.arg("org"));
   if (server.hasArg("key")) claudeUsageSetSessionKey(server.arg("key"));  // empty -> keep current
-  claudeUsageSave();  // persist the new org id + key to config
+  bool saved = claudeUsageSave();  // persist the new org id + key to config
   logInfo("Claude credentials updated via web UI");
   claudeUsageUpdate();  // refresh now so the result shows on the LCD immediately
-  respond(true, "Claude credentials saved");
+  respond(saved, saved ? "Claude credentials saved" : "Save failed (SD card?)");
 }
 
 static void handleGdoc() {
@@ -751,20 +757,20 @@ static void handleGdoc() {
     return;
   }
   gdocSetUrl(server.arg("url"));  // normalizes a Docs link to the txt export
-  gdocSaveUrl();                  // persist to config (esp32.json)
+  bool saved = gdocSaveUrl();     // persist to config (esp32.json)
   logInfo("gdoc URL updated via web UI");
   gdocUpdate();  // refresh the Notes box now
-  respond(true, "Google Doc URL saved");
+  respond(saved, saved ? "Google Doc URL saved" : "Save failed (SD card?)");
 }
 
 static void handleTz() {
   int primary = server.hasArg("primary") ? server.arg("primary").toInt() : timePrimaryZone();
   int secondary = server.hasArg("secondary") ? server.arg("secondary").toInt() : timeSecondaryZone();
   timeSetZones(primary, secondary);  // out-of-range values are ignored
-  timeSaveZones();                   // persist to config (esp32.json)
+  bool saved = timeSaveZones();      // persist to config (esp32.json)
   logInfo("Time zones updated via web UI: %s / %s",
           timeZoneLabel(timePrimaryZone()), timeZoneLabel(timeSecondaryZone()));
-  respond(true, "Time zones saved");
+  respond(saved, saved ? "Time zones saved" : "Save failed (SD card?)");
 }
 
 // Serve a cached asset by streaming it from the SD card in small chunks (so a
@@ -807,28 +813,29 @@ static void handleWeatherDel() {
   int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
   String name = weatherCityName(idx);  // capture before removal
   bool ok = weatherRemoveCity(idx);
-  respond(ok, ok ? ("Removed: " + name) : "Remove failed");
+  respond(ok, ok ? ("Removed: " + name) : "Remove failed (SD card?)");
 }
 
 static void handleIntervals() {
-  if (server.hasArg("claude")) claudeUsageSetIntervalMin(server.arg("claude").toInt());
-  if (server.hasArg("gdoc")) gdocSetIntervalMin(server.arg("gdoc").toInt());
+  bool ok = true;
+  if (server.hasArg("claude")) ok = claudeUsageSetIntervalMin(server.arg("claude").toInt()) && ok;
+  if (server.hasArg("gdoc")) ok = gdocSetIntervalMin(server.arg("gdoc").toInt()) && ok;
   logInfo("Refresh intervals updated via web UI: claude=%d min, gdoc=%d min",
           claudeUsageIntervalMin(), gdocIntervalMin());
-  respond(true, "Refresh intervals saved");
+  respond(ok, ok ? "Refresh intervals saved" : "Save failed (SD card?)");
 }
 
 // Persist the to-do list to the SD card as a markdown checklist:
 //   - [x] done item
 //   - [ ] open item
-static void todoSave() {
+static bool todoSave() {
   String md;
   for (int i = 0; i < todoCount; i++) {
     md += todos[i].done ? "- [x] " : "- [ ] ";
     md += todos[i].text;
     md += '\n';
   }
-  sdWriteText("todo.md", md);
+  return sdWriteText("todo.md", md);
 }
 
 // Load the to-do list back from /sdcard/todo.md (parses the markdown checklist).
@@ -883,14 +890,14 @@ static void handleSave() {
       for (int j = idx; j < todoCount - 1; j++) todos[j] = todos[j + 1];
       todoCount--;
     }
-    todoSave();  // removal is durable
-    logInfo("To-do item %d removed (%d left)", idx, todoCount);
-    respond(true, "To-do item removed");
+    bool saved = todoSave();  // removal is durable
+    logInfo("To-do item %d removed (%d left) -> %s", idx, todoCount, saved ? "saved" : "save failed");
+    respond(saved, saved ? "To-do item removed" : "Save failed (SD card?)");
   } else {
     // Save the list as-is; empty items are kept.
-    todoSave();  // persist to /sdcard/todo.md
-    logInfo("To-do saved (%d items)", todoCount);
-    respond(true, "To-do saved");
+    bool saved = todoSave();  // persist to /sdcard/todo.md
+    logInfo("To-do saved (%d items) -> %s", todoCount, saved ? "ok" : "failed");
+    respond(saved, saved ? "To-do saved" : "Save failed (SD card?)");
   }
 }
 
@@ -980,6 +987,10 @@ void webBegin() {
 
 void webHandle() {
   server.handleClient();
+}
+
+void webReloadTodo() {
+  todoLoad();  // re-read /sdcard/todo.md (e.g. after a card was re-inserted)
 }
 
 int webTodoCount() {

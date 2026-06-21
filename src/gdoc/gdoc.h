@@ -20,8 +20,8 @@ time_t gdocAsOf();            // wall-clock time of the last successful fetch (0
 void gdocSetUrl(const String &url);  // set the URL (a normal Docs link is reduced to the base doc URL; the txt-export suffix is added at fetch time)
 const String &gdocUrl();             // current doc URL
 void gdocLoadUrl();                  // load the URL from config (call after configBegin, before gdocUpdate)
-void gdocSaveUrl();                  // persist the current URL to config (esp32.json)
+bool gdocSaveUrl();                  // persist the current URL to config (esp32.json); false on write failure
 
 // Auto-refresh interval, in minutes (backed by the shared esp32.json store).
 int gdocIntervalMin();               // configured interval (>= 1; default 240)
-void gdocSetIntervalMin(int minutes);  // clamp to >= 1, then persist to config
+bool gdocSetIntervalMin(int minutes);  // clamp to >= 1, then persist to config; false on write failure

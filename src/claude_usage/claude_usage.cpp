@@ -127,10 +127,13 @@ void claudeUsageLoad() {
   logInfo("Claude creds loaded from config (%s)", claudeUsageHasKey() ? "key set" : "no key");
 }
 
-void claudeUsageSave() {
+bool claudeUsageSave() {
   configSet(CLAUDE_ORG_KEY, orgId);
   configSet(CLAUDE_SESSION_KEY, sessionKey);
-  if (configSave()) logInfo("Claude creds saved to config");
+  bool ok = configSave();
+  if (ok) logInfo("Claude creds saved to config");
+  else logError("Claude creds save failed (SD card?)");
+  return ok;
 }
 time_t claudeUsageAsOf() {
   return asOf;
@@ -152,8 +155,8 @@ int claudeUsageIntervalMin() {
   long m = configGetInt(CLAUDE_INTERVAL_KEY, CLAUDE_INTERVAL_DEFAULT);
   return m < 1 ? 1 : (int)m;
 }
-void claudeUsageSetIntervalMin(int minutes) {
+bool claudeUsageSetIntervalMin(int minutes) {
   if (minutes < 1) minutes = 1;
   configSetInt(CLAUDE_INTERVAL_KEY, minutes);
-  configSave();
+  return configSave();
 }

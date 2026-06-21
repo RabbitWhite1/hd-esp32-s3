@@ -297,7 +297,7 @@ static void drawBolt(int cx, int y0) {
 // while charging), the percentage just to its left, the realtime terminal
 // voltage further left, and a bolt over the glyph while charging. rightX is the
 // right edge of the glyph.
-void drawBattery(int rightX, int topY) {
+int drawBattery(int rightX, int topY) {
   const int bw = 22, bh = 11, nub = 2;  // body width/height + positive-terminal nub
   int bx = rightX - nub - bw;
   int pct = batteryPercent();
@@ -324,7 +324,25 @@ void drawBattery(int rightX, int topY) {
   char v[10];
   if (!isnan(batteryVoltage())) snprintf(v, sizeof(v), "%.2fV", batteryVoltage());
   else snprintf(v, sizeof(v), "--V");
-  u8g2->drawStr(sx - 5 - u8g2->getStrWidth(v), baseY, v);
+  int vx = sx - 5 - u8g2->getStrWidth(v);
+  u8g2->drawStr(vx, baseY, v);
+  return vx;  // leftmost x drawn, so the caller can place an icon to the left
+}
+
+// Small SD-card glyph at top-left (x,y): a chamfered-corner body with contact
+// pins. When the card is absent it's crossed out with an X.
+void drawSdcardIcon(int x, int y, bool present) {
+  const int w = 9, h = 12, c = 3;  // body width/height + top-right chamfer
+  u8g2->drawLine(x, y, x + w - c, y);          // top edge up to the chamfer
+  u8g2->drawLine(x + w - c, y, x + w, y + c);  // chamfered corner
+  u8g2->drawVLine(x + w, y + c, h - c + 1);    // right edge
+  u8g2->drawHLine(x, y + h, w + 1);            // bottom edge
+  u8g2->drawVLine(x, y, h);                    // left edge
+  for (int i = 0; i < 3; i++) u8g2->drawVLine(x + 2 + i * 2, y + 2, 2);  // contact pins
+  if (!present) {  // cross it out to mean "no card"
+    u8g2->drawLine(x, y, x + w, y + h);
+    u8g2->drawLine(x + w, y, x, y + h);
+  }
 }
 
 void drawScreen() {
@@ -337,7 +355,8 @@ void drawScreen() {
   u8g2->setFont(u8g2_font_6x13_tf);
   if (timeFormatDateTime(buf, sizeof(buf))) u8g2->drawStr(mx, 24, buf);
   else u8g2->drawStr(mx, 24, "Syncing time...");
-  drawBattery(DISP_W - 8, 12);  // top-right corner, above the header divider
+  int battLeft = drawBattery(DISP_W - 8, 12);  // top-right corner, above the header divider
+  drawSdcardIcon(battLeft - 6 - 9, 12, sdMounted());  // SD status just left of the voltage
   u8g2->drawHLine(mx, 30, lineW);
 
   // Body depends on the selected view (cycled by the BOOT button). The gdoc/to-do
@@ -392,7 +411,7 @@ void setup() {
   // card is prepared, otherwise the persisted settings + Wi-Fi list are erased
   // each boot. The line after it re-seeds a network so the freshly wiped card
   // isn't left empty; harmless to keep (or remove together).
-  sdFormat();
+  // sdFormat();
   // ===========================================================================
 
   // Settings that come from config (esp32.json) need configBegin() first (done above).
@@ -434,6 +453,38 @@ void setup() {
   wifiWasConnected = wifiConnected();  // seed the edge detector; boot already refreshed
 }
 
+// Re-read everything persisted on the SD card (call after a card is (re)mounted).
+// configBegin() must run first since the other loaders read from the config store.
+void reloadFromSd() {
+  configBegin();
+  claudeUsageLoad();
+  wifiLoadNetworks();
+  gdocLoadUrl();
+  timeLoadZones();
+  weatherLoadCities();
+  webReloadTodo();
+  historyBegin();  // recreate sensor_data/ on the (possibly new/blank) card
+  drawScreen();
+}
+
+// Detect the SD card being pulled or (re)inserted at runtime and reload data on
+// re-insert. Polls at a slow cadence: presence is a quick CMD13, but a remount
+// attempt with no card blocks briefly, so we don't want to do it every loop.
+void sdHotplugCheck() {
+  static unsigned long lastCheck = 0;
+  if (millis() - lastCheck < 3000) return;
+  lastCheck = millis();
+  if (sdMounted()) {
+    if (!sdCardPresent()) {
+      logWarn("SD card removed");
+      sdUnmount();
+    }
+  } else if (sdRemount()) {
+    logInfo("SD card inserted -> reloading data");
+    reloadFromSd();
+  }
+}
+
 // Force-refresh every network feed (weather, Claude usage, Google Doc), reset the
 // periodic timers so the next auto-refresh is a full interval away, and redraw.
 // Shared by the KEY button and the on-(re)connect trigger in loop().
@@ -451,6 +502,7 @@ void loop() {
   wifiEnsureConnected();
   wifiLoop();   // tear down the first-time setup AP once a real network is joined
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
+  sdHotplugCheck();  // reload persisted data if the card was pulled + re-inserted
 
   // Auto-refresh on the disconnected->connected edge (e.g. just after first-time
   // setup), exactly like a KEY press, so the screen fills in as soon as we're online.

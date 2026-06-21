@@ -123,10 +123,13 @@ void timeSetZones(int primary, int secondary) {
 static const char *TZ_PRIMARY_KEY = "tz_primary";
 static const char *TZ_SECONDARY_KEY = "tz_secondary";
 
-void timeSaveZones() {
+bool timeSaveZones() {
   configSet(TZ_PRIMARY_KEY, ZONES[g_primary].tz);
   configSet(TZ_SECONDARY_KEY, ZONES[g_secondary].tz);
-  if (configSave()) logInfo("Time zones saved to config");
+  bool ok = configSave();
+  if (ok) logInfo("Time zones saved to config");
+  else logError("Time zones save failed (SD card?)");
+  return ok;
 }
 
 void timeLoadZones() {

@@ -14,7 +14,9 @@ static const int SD_CLK = 38, SD_CMD = 21, SD_D0 = 39;
 static sdmmc_card_t *card = nullptr;
 static bool mounted = false;
 
-bool sdBegin() {
+// Attempt the SDMMC mount; updates `mounted`/`card`. No logging, so it can be
+// retried quietly while polling for a re-inserted card.
+static esp_err_t mountCard() {
   esp_vfs_fat_sdmmc_mount_config_t mcfg = {};
   mcfg.format_if_mount_failed = true;  // make a raw/unreadable card usable
   mcfg.max_files = 5;
@@ -29,12 +31,37 @@ bool sdBegin() {
 
   esp_err_t err = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot, &mcfg, &card);
   mounted = (err == ESP_OK && card != nullptr);
+  return err;
+}
+
+bool sdBegin() {
+  esp_err_t err = mountCard();
   if (mounted) logInfo("SD mounted at %s", MOUNT_POINT);
   else logWarn("SD mount failed (0x%x) - card inserted?", err);
   return mounted;
 }
 
 bool sdMounted() {
+  return mounted;
+}
+
+bool sdCardPresent() {
+  if (!mounted || !card) return false;
+  return sdmmc_get_status(card) == ESP_OK;  // CMD13; fails once the card is pulled
+}
+
+void sdUnmount() {
+  if (mounted) {
+    esp_vfs_fat_sdcard_unmount(MOUNT_POINT, card);
+    logInfo("SD unmounted");
+  }
+  mounted = false;
+  card = nullptr;
+}
+
+bool sdRemount() {
+  if (mounted) return true;
+  mountCard();  // quiet: returns error codes constantly while no card is inserted
   return mounted;
 }
 

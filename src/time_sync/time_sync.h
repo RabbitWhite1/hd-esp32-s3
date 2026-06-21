@@ -17,4 +17,4 @@ int timePrimaryZone();            // index of the primary (main) zone
 int timeSecondaryZone();          // index of the secondary (parenthesized) zone
 void timeSetZones(int primary, int secondary);  // apply (out-of-range values are ignored)
 void timeLoadZones();             // restore from config (call after configBegin, before timeBegin)
-void timeSaveZones();             // persist the current selection to config (esp32.json)
+bool timeSaveZones();             // persist the current selection to config (esp32.json); false on write failure
