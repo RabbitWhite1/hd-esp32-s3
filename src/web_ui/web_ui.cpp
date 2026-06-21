@@ -12,6 +12,7 @@
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../time_sync/time_sync.h"        // select primary/secondary time zones from the form
 #include "../logging/logging.h"
+#include "favicon.h"                       // embedded 32x32 PNG favicon
 #include <WebServer.h>
 #include <time.h>
 
@@ -153,6 +154,7 @@ static void handleSetup() {
   String h =
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<link rel='icon' type='image/png' href='/favicon.ico'>"
     "<title>Wi-Fi setup</title><style>"
     "body{font-family:system-ui,Arial,sans-serif;max-width:24rem;margin:2rem auto;padding:0 1rem;color:#222}"
     "h1{font-size:1.4rem}label{display:block;margin:1rem 0 .25rem;font-weight:600}"
@@ -192,7 +194,8 @@ static void handleRoot() {
   String html =
     "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>hd panel</title>";
+    "<title>hd panel</title>"
+    "<link rel='icon' type='image/png' href='/favicon.ico'>";
   html += cssLink("/bootstrap.css");
   html +=
     "<style>html{scroll-behavior:smooth}.card{scroll-margin-top:7rem}"
@@ -822,6 +825,11 @@ static void handleAsset() {
   fclose(f);
 }
 
+static void handleFavicon() {
+  server.sendHeader("Cache-Control", "max-age=604800");  // browser may cache it a week
+  server.send_P(200, "image/png", (const char *)favicon_png, favicon_png_len);
+}
+
 static void handleWeatherAdd() {
   String q = server.hasArg("city") ? server.arg("city") : "";
   String resolved;
@@ -1019,6 +1027,7 @@ void webBegin() {
   static const char *HEADER_KEYS[] = {"X-Requested-With"};
   server.collectHeaders(HEADER_KEYS, sizeof(HEADER_KEYS) / sizeof(HEADER_KEYS[0]));
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/favicon.ico", HTTP_GET, handleFavicon);  // embedded star icon
   server.on("/stats", HTTP_GET, handleStats);    // curl-friendly JSON snapshot
   server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW chart
   server.on("/save", HTTP_POST, handleSave);
