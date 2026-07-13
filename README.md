@@ -31,6 +31,8 @@ You also need the **ESP32 board package** (`esp32:esp32`) installed via the Boar
 
 ## Build / flash
 
+Please follow [official doc](https://docs.waveshare.com/ESP32-Arduino-Tutorials/Arduino-IDE-Setup) to setup IDE.
+
 Plain Arduino sketch — build with `arduino-cli` or the Arduino IDE (not PlatformIO/idf.py). The
 sketch folder name must match the `.ino`: `hd-esp32-s3.ino` inside `hd-esp32-s3/`.
 
