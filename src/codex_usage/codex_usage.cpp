@@ -111,7 +111,8 @@ void codexUsageUpdate() {
   if (!wifiConnected()) return;
   if (accessToken.length() == 0) return;  // no token relayed yet -> nothing to fetch
   if (codexTokenExpired()) {
-    logWarn("Codex usage: access token expired -- relay a fresh one (see README)");
+    logWarn("Codex usage: access token expired -- re-run the relay "
+            "(README section \"Codex usage relay\")");
     ok = false;
     return;
   }
@@ -232,7 +233,11 @@ bool codexTokenExpired() {
 void codexUsageLoad() {
   String t = configGet(CODEX_TOKEN_KEY);
   if (t.length() > 0) codexUsageSetToken(t);
-  logInfo("Codex token loaded from config (%s)", codexUsageHasToken() ? "set" : "none");
+  if (codexUsageHasToken())
+    logInfo("Codex token loaded from config");
+  else
+    logInfo("Codex token not set -- set up the relay (README section \"Codex usage relay\") "
+            "or paste a token in the web UI");
 }
 
 bool codexUsageSave() {

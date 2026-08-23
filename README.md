@@ -75,9 +75,11 @@ The single quotes matter: `$(...)` must be evaluated by cron at run time, not wh
 installed. Cron runs the job under `/bin/sh`, so the command deliberately avoids bash-isms.
 
 Without the cron job the panel still works — paste the token into **Configuration → Codex usage** in
-the web UI (it's `tokens.access_token` in `~/.codex/auth.json`) and re-paste it every ~10 days. The
-LCD says `no token relayed yet` until the first POST lands and `token expired - relay a new one`
-once the token's `exp` passes; the web card shows the exact expiry date read from the token itself.
+the web UI (it's `tokens.access_token` in `~/.codex/auth.json`) and re-paste it every ~10 days. Whenever
+there is no usable token the device points back here: the LCD shows `no access token relayed yet`
+(or `access token expired`) above `see README: Codex usage relay`, the web card raises a warning
+naming this section, and the serial log says the same at boot. The web card also shows the exact
+expiry date, read from the token itself.
 
 Note the reported windows depend on your plan — a Plus account currently returns a single 7-day
 window and no secondary one, so only one gauge is drawn.

@@ -483,6 +483,17 @@ static void handleRoot() {
     html += "</span>";
   }
   html += "</p>";
+  // Nothing can be fetched without a live token, so say what to do about it and
+  // name the README section that sets the relay up (its cron is in the details
+  // block below, so the fix is reachable without leaving the page).
+  if (!codexUsageHasToken() || codexTokenExpired()) {
+    html += "<div class='alert alert-warning py-2'>";
+    html += codexUsageHasToken() ? "The access token has expired, so usage can't be fetched. "
+                                 : "No access token yet, so usage can't be fetched. ";
+    html += "Set up the hourly relay &mdash; see <strong>Codex usage relay</strong> in the "
+            "README, or use <em>Keep it fresh automatically</em> below &mdash; or paste a "
+            "token here now.</div>";
+  }
   // The stored token is never written into the page, so it can't be read back off
   // the LAN; leave the box blank to keep the current one.
   html += "<form id='codexform' action='/codex' method='POST'>"

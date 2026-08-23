@@ -307,15 +307,19 @@ void drawOverview(int mx, int lineW) {
   // Codex reports its windows generically (their lengths vary by plan, and Plus
   // has no secondary one), so the labels come from the reported window lengths;
   // with a single window its gauge is centred on the icon instead of paired.
-  drawUsageHeading(mx, 230, "Codex Usage", codexUsageAsOf());
+  // Two spaces: 6x12 is fixed-width, so the extra cell makes up for "Codex" being
+  // a character shorter than "Claude" and lines both "Usage" words up.
+  drawUsageHeading(mx, 230, "Codex  Usage", codexUsageAsOf());
   u8g2->drawXBMP(mx + (iconSlotW - CODEX_ICON_W) / 2, 248 - CODEX_ICON_H / 2, CODEX_ICON_W,
                  CODEX_ICON_H, codex_icon_bits);
   if (!codexUsageHasToken() || codexTokenExpired()) {
     // The token is relayed in by the machine running the Codex CLI, so say which
-    // half of that is missing rather than silently drawing empty gauges.
+    // half of that is missing rather than silently drawing empty gauges -- and
+    // name the README section that explains how to set the relay up.
     u8g2->setFont(u8g2_font_5x7_tf);
-    u8g2->drawStr(gaugeX, 251, codexUsageHasToken() ? "token expired - re-run relay"
-                                                    : "no token relayed yet");
+    u8g2->drawStr(gaugeX, 245, codexUsageHasToken() ? "access token expired"
+                                                    : "no access token relayed yet");
+    u8g2->drawStr(gaugeX, 256, "see README: Codex usage relay");
   } else if (codexSecondaryWindowMin() > 0) {
     drawUsageBar(gaugeX, 236, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
     drawUsageBar(gaugeX, 252, gaugeW, codexSecondaryLabel(), codexSecondaryPercent());
