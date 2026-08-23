@@ -15,6 +15,7 @@
 #include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
 #include "src/codex_usage/codex_usage.h"    // codexUsageUpdate / codexPrimaryPercent — Codex (ChatGPT) limits
+#include "src/codex_usage/codex_icon.h"     // codex_icon_bits — OpenAI mark drawn left of the Codex gauges
 #include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
@@ -221,6 +222,25 @@ void drawUsageBar(int x, int y, int w, const char *label, float pct) {
   }
 }
 
+// A usage section heading: "<Title>  As of yyyy-mm-dd hh:mm" on one baseline, the
+// timestamp in a smaller font right after the title (or "never updated" before the
+// first successful fetch).
+void drawUsageHeading(int x, int y, const char *title, time_t asOf) {
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(x, y, title);
+  int titleW = u8g2->getStrWidth(title);  // measure while the title font is active
+  u8g2->setFont(u8g2_font_5x7_tf);
+  if (asOf > 0) {
+    struct tm asOfTm;
+    localtime_r(&asOf, &asOfTm);
+    char asOfStr[28];
+    strftime(asOfStr, sizeof(asOfStr), "As of %Y-%m-%d %H:%M", &asOfTm);
+    u8g2->drawStr(x + titleW + 6, y, asOfStr);
+  } else {
+    u8g2->drawStr(x + titleW + 6, y, "never updated");
+  }
+}
+
 // Overview view: temp/humidity row, weather rows, the Notes box, Claude usage, and
 // the to-do box — the original composited layout between the header and footer.
 void drawOverview(int mx, int lineW) {
@@ -271,45 +291,36 @@ void drawOverview(int mx, int lineW) {
   const int halfW = (lineW - halfGap) / 2;
   const int rightX = mx + halfW + halfGap;
 
-  // Claude usage (left half). The title keeps its full width within the half; the
-  // "As of" timestamp drops to a small second line so it fits.
-  u8g2->setFont(u8g2_font_6x12_tf);
-  u8g2->drawStr(mx, 187, "Claude Usage");
-  u8g2->setFont(u8g2_font_5x7_tf);
-  time_t cuAsOf = claudeUsageAsOf();
-  if (cuAsOf > 0) {
-    struct tm cuTm;
-    localtime_r(&cuAsOf, &cuTm);
-    char asOfStr[28];
-    strftime(asOfStr, sizeof(asOfStr), "As of %Y-%m-%d %H:%M", &cuTm);
-    u8g2->drawStr(mx, 197, asOfStr);
-  } else {
-    u8g2->drawStr(mx, 197, "never updated");
-  }
-  // Mascot on the left; the two gauges are shifted right to make room for it.
-  const int clawdGap = 6;
-  const int gaugeX = mx + CLAWD_ICON_W + clawdGap;
-  const int gaugeW = halfW - (CLAWD_ICON_W + clawdGap);
-  u8g2->drawXBMP(mx, 222 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
-  drawUsageBar(gaugeX, 210, gaugeW, "5h", claudeFiveHour());
-  drawUsageBar(gaugeX, 226, gaugeW, "7d", claudeSevenDay());
+  // Claude usage, then Codex usage, stacked in the left half. Each is a heading
+  // row (title + fetch time) above a mascot with its gauges to the right. Both
+  // gauge columns start after the widest icon so they line up with each other.
+  const int iconGap = 6;
+  const int iconSlotW = CLAWD_ICON_W;  // widest of the two marks
+  const int gaugeX = mx + iconSlotW + iconGap;
+  const int gaugeW = halfW - (iconSlotW + iconGap);
 
-  // Codex usage under the Claude gauges, sharing their gauge column. The API
-  // reports its windows generically (their lengths vary by plan, and Plus has no
-  // secondary one), so the labels come from the reported window lengths and the
-  // second gauge is drawn only when the API sends a second window.
-  u8g2->setFont(u8g2_font_6x12_tf);
-  u8g2->drawStr(mx, 250, "Codex Usage");
+  drawUsageHeading(mx, 184, "Claude Usage", claudeUsageAsOf());
+  u8g2->drawXBMP(mx, 202 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
+  drawUsageBar(gaugeX, 190, gaugeW, "5h", claudeFiveHour());
+  drawUsageBar(gaugeX, 206, gaugeW, "7d", claudeSevenDay());
+
+  // Codex reports its windows generically (their lengths vary by plan, and Plus
+  // has no secondary one), so the labels come from the reported window lengths;
+  // with a single window its gauge is centred on the icon instead of paired.
+  drawUsageHeading(mx, 230, "Codex Usage", codexUsageAsOf());
+  u8g2->drawXBMP(mx + (iconSlotW - CODEX_ICON_W) / 2, 248 - CODEX_ICON_H / 2, CODEX_ICON_W,
+                 CODEX_ICON_H, codex_icon_bits);
   if (!codexUsageHasToken() || codexTokenExpired()) {
     // The token is relayed in by the machine running the Codex CLI, so say which
     // half of that is missing rather than silently drawing empty gauges.
     u8g2->setFont(u8g2_font_5x7_tf);
-    u8g2->drawStr(mx, 262, codexUsageHasToken() ? "token expired - relay a new one"
-                                                : "no token relayed yet");
+    u8g2->drawStr(gaugeX, 251, codexUsageHasToken() ? "token expired - re-run relay"
+                                                    : "no token relayed yet");
+  } else if (codexSecondaryWindowMin() > 0) {
+    drawUsageBar(gaugeX, 236, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
+    drawUsageBar(gaugeX, 252, gaugeW, codexSecondaryLabel(), codexSecondaryPercent());
   } else {
-    drawUsageBar(gaugeX, 256, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
-    if (codexSecondaryWindowMin() > 0)
-      drawUsageBar(gaugeX, 270, gaugeW, codexSecondaryLabel(), codexSecondaryPercent());
+    drawUsageBar(gaugeX, 244, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
   }
 
   // To-do list (right half), in a framed box.
