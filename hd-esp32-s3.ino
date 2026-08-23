@@ -132,31 +132,40 @@ void drawDroplet(int x, int y, int h) {
 // checkbox (X'd + struck through when done) and is clipped to the box width.
 void drawTodoBox(int x, int y, int w, int h) {
   u8g2->drawFrame(x, y, w, h);
-  u8g2->setFont(u8g2_font_6x10_tf);
-  u8g2->drawStr(x + 6, y + 11, "To-do");
-  u8g2->drawHLine(x + 4, y + 15, w - 8);
+  // Same GB2312 font + drawUTF8 as the doc box, so Chinese items render here too.
+  u8g2->setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2->setClipWindow(x + 1, y + 1, x + w - 1, y + h - 1);  // keep text inside the box
+  u8g2->drawUTF8(x + 6, y + 13, "To-do");
+  u8g2->drawHLine(x + 4, y + 17, w - 8);
 
   int n = webTodoCount();
   if (n == 0) {
-    u8g2->drawStr(x + 6, y + 28, "(empty)");
+    u8g2->drawUTF8(x + 6, y + 31, "(empty)");
+    u8g2->setMaxClipWindow();
     return;
   }
-  int maxChars = (w - 20) / 6;  // chars that fit after the checkbox
-  if (maxChars > 64) maxChars = 64;
-  int ty = y + 28;  // first item's text baseline
-  for (int i = 0; i < n && ty <= y + h - 4; i++) {
+  const int textX = x + 18;              // text starts after the checkbox
+  const int textRight = x + w - 6;       // right edge available to the text
+  int ty = y + 31;                       // first item's text baseline
+  for (int i = 0; i < n && ty <= y + h - 3; i++) {
     int cbx = x + 6, cby = ty - 8;
     u8g2->drawFrame(cbx, cby, 8, 8);
     if (webTodoDone(i)) {
       u8g2->drawLine(cbx, cby, cbx + 7, cby + 7);
       u8g2->drawLine(cbx + 7, cby, cbx, cby + 7);
     }
-    char line[66];
-    snprintf(line, sizeof(line), "%.*s", maxChars, webTodoText(i));
-    u8g2->drawStr(cbx + 12, ty, line);
-    if (webTodoDone(i)) u8g2->drawHLine(cbx + 12, ty - 3, (int)strlen(line) * 6);
-    ty += 13;
+    // Overflow is clipped by the clip window rather than char-counted, which is
+    // unreliable with mixed half/full-width glyphs (and would cut UTF-8 mid-sequence).
+    const char *t = webTodoText(i);
+    u8g2->drawUTF8(textX, ty, t);
+    if (webTodoDone(i)) {
+      int tw = u8g2->getUTF8Width(t);
+      if (tw > textRight - textX) tw = textRight - textX;
+      if (tw > 0) u8g2->drawHLine(textX, ty - 4, tw);
+    }
+    ty += 14;  // line height for the 12px GB2312 font
   }
+  u8g2->setMaxClipWindow();  // restore the full drawing area for the rest of the UI
 }
 
 // Render the fetched Google Doc lines inside a framed box. Unlike the rest of the
