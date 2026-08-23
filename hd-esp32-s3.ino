@@ -14,6 +14,7 @@
 #include "src/web_ui/web_ui.h"               // webBegin / webHandle / webTodo*
 #include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
+#include "src/codex_usage/codex_usage.h"    // codexUsageUpdate / codexPrimaryPercent — Codex (ChatGPT) limits
 #include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
@@ -45,12 +46,14 @@ const unsigned long SAMPLE_INTERVAL = 10 * 1000;
 const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
 const unsigned long HISTORY_INTERVAL = 60UL * 1000;            // append one temp/humidity sample to the yearly CSV per minute
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
-// Claude-usage and Google-Doc refresh intervals are user-configurable (minutes)
-// and live in esp32.json — see claudeUsageIntervalMin() / gdocIntervalMin().
+// Claude-usage, Codex-usage and Google-Doc refresh intervals are user-configurable
+// (minutes) and live in esp32.json — see claudeUsageIntervalMin() /
+// codexUsageIntervalMin() / gdocIntervalMin().
 unsigned long lastSample = 0;
 unsigned long lastHistory = 0;
 unsigned long lastWeather = 0;
 unsigned long lastClaudeUsage = 0;
+unsigned long lastCodexUsage = 0;
 unsigned long lastGdoc = 0;
 unsigned long sampleCount = 0;
 
@@ -291,6 +294,24 @@ void drawOverview(int mx, int lineW) {
   drawUsageBar(gaugeX, 210, gaugeW, "5h", claudeFiveHour());
   drawUsageBar(gaugeX, 226, gaugeW, "7d", claudeSevenDay());
 
+  // Codex usage under the Claude gauges, sharing their gauge column. The API
+  // reports its windows generically (their lengths vary by plan, and Plus has no
+  // secondary one), so the labels come from the reported window lengths and the
+  // second gauge is drawn only when the API sends a second window.
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(mx, 250, "Codex Usage");
+  if (!codexUsageHasToken() || codexTokenExpired()) {
+    // The token is relayed in by the machine running the Codex CLI, so say which
+    // half of that is missing rather than silently drawing empty gauges.
+    u8g2->setFont(u8g2_font_5x7_tf);
+    u8g2->drawStr(mx, 262, codexUsageHasToken() ? "token expired - relay a new one"
+                                                : "no token relayed yet");
+  } else {
+    drawUsageBar(gaugeX, 256, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
+    if (codexSecondaryWindowMin() > 0)
+      drawUsageBar(gaugeX, 270, gaugeW, codexSecondaryLabel(), codexSecondaryPercent());
+  }
+
   // To-do list (right half), in a framed box.
   drawTodoBox(rightX, 176, mx + lineW - rightX, 102);
 }
@@ -427,6 +448,7 @@ void setup() {
 
   // Settings that come from config (esp32.json) need configBegin() first (done above).
   claudeUsageLoad();  // restore the Claude org id + session key from config
+  codexUsageLoad();   // restore the relayed Codex access token from config
   wifiLoadNetworks();
   gdocLoadUrl();  // restore the configured Google Doc URL before the first gdocUpdate()
   timeLoadZones();  // restore the selected primary/secondary time zones before timeBegin()
@@ -456,6 +478,10 @@ void setup() {
   lastClaudeUsage = millis();
   drawScreen();
 
+  codexUsageUpdate();
+  lastCodexUsage = millis();
+  drawScreen();
+
   gdocUpdate();
   lastGdoc = millis();
   drawScreen();
@@ -469,6 +495,7 @@ void setup() {
 void reloadFromSd() {
   configBegin();
   claudeUsageLoad();
+  codexUsageLoad();
   wifiLoadNetworks();
   gdocLoadUrl();
   timeLoadZones();
@@ -496,15 +523,17 @@ void sdHotplugCheck() {
   }
 }
 
-// Force-refresh every network feed (weather, Claude usage, Google Doc), reset the
+// Force-refresh every network feed (weather, Claude/Codex usage, Google Doc), reset the
 // periodic timers so the next auto-refresh is a full interval away, and redraw.
 // Shared by the KEY button and the on-(re)connect trigger in loop().
 void refreshAll() {
   weatherUpdateAll();
   claudeUsageUpdate();
+  codexUsageUpdate();
   gdocUpdate();
   lastWeather = millis();
   lastClaudeUsage = millis();
+  lastCodexUsage = millis();
   lastGdoc = millis();
   drawScreen();  // show the freshly fetched data
 }
@@ -559,6 +588,11 @@ void loop() {
   if (now - lastClaudeUsage >= claudeUsageIntervalMin() * 60UL * 1000UL) {
     lastClaudeUsage = now;
     claudeUsageUpdate();
+  }
+
+  if (now - lastCodexUsage >= codexUsageIntervalMin() * 60UL * 1000UL) {
+    lastCodexUsage = now;
+    codexUsageUpdate();
   }
 
   if (now - lastGdoc >= gdocIntervalMin() * 60UL * 1000UL) {

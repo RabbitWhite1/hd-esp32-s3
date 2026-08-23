@@ -3,6 +3,7 @@
 
 #include "web_ui.h"
 #include "../claude_usage/claude_usage.h"  // configure org id + session key from the web form
+#include "../codex_usage/codex_usage.h"    // receive the relayed Codex access token
 #include "../sensors/sensors.h"            // live temp/humidity shown on the page
 #include "../wifi_net/wifi_net.h"          // add/list saved Wi-Fi networks from the form
 #include "../weather/weather.h"            // add/remove weather cities (geocoded) from the form
@@ -288,6 +289,7 @@ static void handleRoot() {
           "<a class='nav-link' href='#weather'>Weather cities</a>"
           "<a class='nav-link' href='#intervals'>Refresh intervals</a>"
           "<a class='nav-link' href='#claude'>Claude usage</a>"
+          "<a class='nav-link' href='#codex'>Codex usage</a>"
           "<a class='nav-link' href='#wifi'>Wi-Fi</a>"
           "</nav></div>"
           "<div class='col-12 col-md-9'>";
@@ -381,11 +383,15 @@ static void handleRoot() {
   // non-editable light-grey "min" suffix.
   html += cardOpen("intervals", "Refresh intervals", saveBtn("intervalsform"));
   html += "<form id='intervalsform' action='/intervals' method='POST' class='row g-3'>"
-          "<div class='col-sm-6'><label class='form-label'>Claude usage</label>"
+          "<div class='col-sm-4'><label class='form-label'>Claude usage</label>"
           "<div class='input-group'><input type='number' class='form-control' name='claude' min='1' value='";
   html += claudeUsageIntervalMin();
   html += "'><span class='input-group-text text-muted'>min</span></div></div>"
-          "<div class='col-sm-6'><label class='form-label'>Google Doc</label>"
+          "<div class='col-sm-4'><label class='form-label'>Codex usage</label>"
+          "<div class='input-group'><input type='number' class='form-control' name='codex' min='1' value='";
+  html += codexUsageIntervalMin();
+  html += "'><span class='input-group-text text-muted'>min</span></div></div>"
+          "<div class='col-sm-4'><label class='form-label'>Google Doc</label>"
           "<div class='input-group'><input type='number' class='form-control' name='gdoc' min='1' value='";
   html += gdocIntervalMin();
   html += "'><span class='input-group-text text-muted'>min</span></div></div></form>";
@@ -443,6 +449,64 @@ static void handleRoot() {
           "for the Cookie tab &mdash; or read off <code>sessionKey</code> and <code>lastActiveOrg</code> "
           "for the Org ID + key tab.</li>"
           "</ol></details>";
+  html += cardClose;
+
+  // Codex usage. Unlike the Claude card there is nothing to copy out of a browser:
+  // the ChatGPT access token is minted by the `codex` CLI and expires in ~10 days,
+  // so the machine running Codex relays it here (cron one-liner in the README) and
+  // the device fetches its own usage with it. The paste box is the manual fallback.
+  html += cardOpen("codex", "Codex usage", saveBtn("codexform"));
+  html += "<p class='mb-2'>Access token ";
+  if (!codexUsageHasToken()) {
+    html += "<span class='badge text-bg-secondary'>not set</span>";
+  } else if (codexTokenExpired()) {
+    html += "<span class='badge text-bg-danger'>expired</span>";
+  } else {
+    html += "<span class='badge text-bg-success'>set</span>";
+  }
+  // Expiry is read from the token's own "exp" claim, so the page can say when the
+  // relay needs to run again rather than waiting for a 401.
+  time_t exp = codexTokenExpiry();
+  if (exp > 0) {
+    struct tm expTm;
+    localtime_r(&exp, &expTm);
+    char expStr[40];
+    strftime(expStr, sizeof(expStr), "%Y-%m-%d %H:%M", &expTm);
+    html += "<span class='text-muted small ms-2'>expires ";
+    html += expStr;
+    time_t now = time(nullptr);
+    if (now > 1600000000 && exp > now) {
+      html += " (in ";
+      html += (int)((exp - now) / 86400);
+      html += "d)";
+    }
+    html += "</span>";
+  }
+  html += "</p>";
+  // The stored token is never written into the page, so it can't be read back off
+  // the LAN; leave the box blank to keep the current one.
+  html += "<form id='codexform' action='/codex' method='POST'>"
+          "<label class='form-label'>Paste access token</label>"
+          "<textarea class='form-control' name='token' rows='3' "
+          "placeholder='eyJhbGciOi... (leave blank to keep current)'></textarea>"
+          "<div class='form-text'>From <code>~/.codex/auth.json</code> &rarr; "
+          "<code>tokens.access_token</code> on the machine you run Codex on.</div></form>";
+  html += "<details class='mt-3'><summary class='text-primary' style='cursor:pointer'>"
+          "Keep it fresh automatically</summary>"
+          "<p class='form-text mb-2 mt-2'>Codex re-mints the token every time you use it. "
+          "This hourly cron relays whatever the CLI last stored, so the device stays "
+          "current without any manual step:</p>"
+          "<pre class='form-text bg-body-secondary p-2 rounded' "
+          "style='white-space:pre-wrap;word-break:break-all'><code>";
+  // Single-quoted so $(...) is evaluated by cron at run time, not when installing;
+  // no process substitution, since cron runs the line under /bin/sh.
+  html += "(crontab -l 2>/dev/null; echo '0 * * * * curl -sf -X POST -d "
+          "token=$(jq -r .tokens.access_token $HOME/.codex/auth.json) http://";
+  html += wifiHostname();
+  html += ".local/codextoken') | crontab -";
+  html += "</code></pre>"
+          "<p class='form-text mb-0'>Remove it again with "
+          "<code>crontab -l | grep -v codextoken | crontab -</code>.</p></details>";
   html += cardClose;
 
   // Wi-Fi: list the saved (known-good) networks and add a new one. A network is
@@ -889,12 +953,45 @@ static void handleWeatherOrder() {
   respond(saved, saved ? "Priority order saved" : "Save failed (SD card?)");
 }
 
+// Store a relayed/pasted Codex access token. `machine` picks the reply style: the
+// cron relay is a plain curl, so it gets plain text instead of the form's toast
+// JSON / redirect. An unchanged token is accepted without touching the SD card,
+// so an hourly relay doesn't rewrite esp32.json 24 times a day.
+static void applyCodexToken(bool machine) {
+  String tok = server.hasArg("token") ? server.arg("token") : String("");
+  tok.trim();
+  bool ok = true;
+  String msg;
+  if (tok.length() == 0) {
+    ok = false;
+    msg = "No token supplied";
+  } else if (codexTokenMatches(tok)) {
+    msg = "Token unchanged";
+  } else {
+    codexUsageSetToken(tok);
+    ok = codexUsageSave();
+    msg = ok ? "Codex token saved" : "Save failed (SD card?)";
+    logInfo("Codex token updated via %s", machine ? "relay" : "web UI");
+    if (ok) codexUsageUpdate();  // refresh now so the result shows on the LCD immediately
+  }
+  if (machine) server.send(ok ? 200 : 400, "text/plain", msg + "\n");
+  else respond(ok, msg);
+}
+
+static void handleCodex() {
+  applyCodexToken(false);
+}
+static void handleCodexToken() {
+  applyCodexToken(true);
+}
+
 static void handleIntervals() {
   bool ok = true;
   if (server.hasArg("claude")) ok = claudeUsageSetIntervalMin(server.arg("claude").toInt()) && ok;
+  if (server.hasArg("codex")) ok = codexUsageSetIntervalMin(server.arg("codex").toInt()) && ok;
   if (server.hasArg("gdoc")) ok = gdocSetIntervalMin(server.arg("gdoc").toInt()) && ok;
-  logInfo("Refresh intervals updated via web UI: claude=%d min, gdoc=%d min",
-          claudeUsageIntervalMin(), gdocIntervalMin());
+  logInfo("Refresh intervals updated via web UI: claude=%d min, codex=%d min, gdoc=%d min",
+          claudeUsageIntervalMin(), codexUsageIntervalMin(), gdocIntervalMin());
   respond(ok, ok ? "Refresh intervals saved" : "Save failed (SD card?)");
 }
 
@@ -1032,6 +1129,8 @@ void webBegin() {
   server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW chart
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
+  server.on("/codex", HTTP_POST, handleCodex);            // token pasted into the web form
+  server.on("/codextoken", HTTP_POST, handleCodexToken);  // token relayed by the cron one-liner
   server.on("/gdoc", HTTP_POST, handleGdoc);
   server.on("/tz", HTTP_POST, handleTz);
   server.on("/intervals", HTTP_POST, handleIntervals);
