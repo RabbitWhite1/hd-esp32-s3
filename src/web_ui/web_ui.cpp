@@ -254,11 +254,17 @@ static void handleRoot() {
   html += cardClose;
 
   html += cardOpen("todo", "To-do",
-                   "<button class='btn btn-sm btn-primary' form='todoform' "
+                   "<button id='todosavebtn' class='btn btn-sm btn-primary' form='todoform' "
                    "name='action' value='save'>Save</button>");
-  html += "<form id='todoform' action='/save' method='POST'>";
+  html += "<div class='text-muted small mb-2'>Drag to reorder; click Save to keep changes</div>"
+          "<form id='todoform' action='/save' method='POST'>"
+          "<input type='hidden' name='order' id='todoorderinput'>"
+          "<div id='todolist'>";
   for (int i = 0; i < todoCount; i++) {
-    html += "<div class='input-group mb-2'><div class='input-group-text'>"
+    html += "<div class='input-group mb-2' data-idx='";
+    html += i;
+    html += "'><span class='input-group-text drag-handle' style='cursor:grab' "
+            "title='Drag to reorder'>&#x2630;</span><div class='input-group-text'>"
             "<input class='form-check-input mt-0' type='checkbox' name='done";
     html += i;
     html += "'";
@@ -271,6 +277,7 @@ static void handleRoot() {
     html += i;
     html += "'>&times;</button></div>";
   }
+  html += "</div>";
   // "+" adds a blank row (a server round-trip that also preserves current edits).
   if (todoCount < MAX_TODOS)
     html += "<button class='btn btn-outline-secondary' type='submit' name='action' value='add'>+ Add row</button>";
@@ -692,14 +699,15 @@ static void handleRoot() {
           "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,tempRange(h.temp),'#dc3545','\\u00b0C',f,t,showDate);"
           "window._thh=buildChart('thchart_h','Humidity %',hm,{min:0,max:100},'#0d6efd','%',f,t,showDate);}"
           // Make a reorderable list drag-sortable; dropping only rearranges the DOM
-          // and lights the Save button. Used for both Wi-Fi and weather lists.
+          // and lights the Save button. Used for To-do, Wi-Fi, and weather lists.
           "function makeSortable(listId,btnId){var el=document.getElementById(listId);"
           "if(!el||typeof Sortable==='undefined')return;"
           "Sortable.create(el,{handle:'.drag-handle',animation:150,onEnd:function(evt){"
           "if(evt.oldIndex===evt.newIndex)return;"  // dropped back in place -> nothing changed
           "var b=document.getElementById(btnId);"
           "if(b){b.classList.remove('btn-outline-secondary');b.classList.add('btn-primary');b.disabled=false;}}});}"
-          "function initSortable(){makeSortable('wifilist','wifisavebtn');makeSortable('citylist','citysavebtn');}"
+          "function initSortable(){makeSortable('todolist','todosavebtn');"
+          "makeSortable('wifilist','wifisavebtn');makeSortable('citylist','citysavebtn');}"
           // Fill a Save-order form's hidden field with its list's current DOM order.
           "function fillOrder(listId,inputId){var wl=document.getElementById(listId);"
           "var oi=document.getElementById(inputId);"
@@ -712,6 +720,7 @@ static void handleRoot() {
           // the device applies + persists exactly what's shown.
           "if(f.id==='wifisaveform')fillOrder('wifilist','wifiorderinput');"
           "if(f.id==='citysaveform')fillOrder('citylist','cityorderinput');"
+          "if(f.id==='todoform')fillOrder('todolist','todoorderinput');"
           "var body=new URLSearchParams(new FormData(f));"
           "var s=ev.submitter;if(s&&s.name)body.append(s.name,s.value);"
           "busyOn();"
@@ -1054,6 +1063,32 @@ static void rebuildFromArgs() {
   }
 }
 
+// Apply the browser's drag order after rebuildFromArgs() has captured the
+// current text and checkbox values. The order must be a full permutation of
+// the submitted rows; malformed/stale requests are rejected without saving.
+static bool todoApplyOrder(const String &csv) {
+  Todo reordered[MAX_TODOS];
+  bool seen[MAX_TODOS] = {};
+  int start = 0;
+  for (int n = 0; n < todoCount; n++) {
+    if (start > (int)csv.length()) return false;
+    int comma = csv.indexOf(',', start);
+    if ((n < todoCount - 1 && comma < 0) || (n == todoCount - 1 && comma >= 0)) return false;
+    String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+    tok.trim();
+    if (!tok.length()) return false;
+    for (size_t j = 0; j < tok.length(); j++)
+      if (tok[j] < '0' || tok[j] > '9') return false;
+    int idx = tok.toInt();
+    if (idx < 0 || idx >= todoCount || seen[idx]) return false;
+    seen[idx] = true;
+    reordered[n] = todos[idx];
+    start = comma + 1;
+  }
+  for (int i = 0; i < todoCount; i++) todos[i] = reordered[i];
+  return true;
+}
+
 static void handleSave() {
   rebuildFromArgs();
   String action = server.hasArg("action") ? server.arg("action") : "save";
@@ -1075,7 +1110,13 @@ static void handleSave() {
     logInfo("To-do item %d removed (%d left) -> %s", idx, todoCount, saved ? "saved" : "save failed");
     respond(saved, saved ? "To-do item removed" : "Save failed (SD card?)");
   } else {
-    // Save the list as-is; empty items are kept.
+    // Save the current fields in their dragged order; empty items are kept.
+    String order = server.hasArg("order") ? server.arg("order") : "";
+    order.trim();
+    if (order.length() && !todoApplyOrder(order)) {
+      respond(false, "Reorder failed");
+      return;
+    }
     bool saved = todoSave();  // persist to /sdcard/todo.md
     logInfo("To-do saved (%d items) -> %s", todoCount, saved ? "ok" : "failed");
     respond(saved, saved ? "To-do saved" : "Save failed (SD card?)");
