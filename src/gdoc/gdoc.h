@@ -6,9 +6,10 @@
 #include <time.h>
 
 // Google Doc backend: fetches a link-shared document's plain-text export over
-// HTTPS and caches its lines for display on the LCD. The doc URL has a default in
-// gdoc.cpp but is overridable at runtime via the web UI (persisted to SD); the doc
-// must stay shared as "anyone with the link".
+// HTTPS and caches its lines for display on the LCD. No URL is baked into the
+// firmware -- it is set at runtime via the web UI and persisted to SD, so the
+// module simply no-ops until then; the doc must stay shared as "anyone with the
+// link".
 void gdocUpdate();            // fetch + parse; updates the cached lines (call when Wi-Fi is up)
 bool gdocOk();                // true if the most recent fetch succeeded
 int gdocLineCount();          // number of cached non-empty lines

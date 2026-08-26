@@ -53,8 +53,7 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 
 // claude.ai organization id and the "sessionKey" cookie used to authenticate.
 // Both are set at runtime (via the web UI), so no secret lives in the firmware/git.
-// The org id defaults to a known value for convenience; the key starts blank, so
-// until it is set fetches fail with HTTP 401. The key looks like "sk-ant-sid0X-..."
+// Both start blank, so until they are set fetches fail with HTTP 401. The key looks like "sk-ant-sid0X-..."
 // and expires periodically (re-enter it on the web page when it does).
 static String orgId = "";
 static String sessionKey = "";
