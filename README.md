@@ -87,6 +87,25 @@ window and no secondary one, so only one gauge is drawn.
 See `CLAUDE.md` for architecture, the module/BSP layout, the pin map, and the list of persisted
 SD-card files.
 
+## Continuous integration
+
+`.github/workflows/firmware.yml` builds the image on every push to `main` and on pull requests, pinned to the
+same core and library versions used locally (ESP32 core 3.3.11, U8g2 2.36.19, ArduinoJson 7.4.3, SensorLib
+0.4.1). Each run uploads `hd-esp32-s3.ino.bin` plus its SHA-256 as a workflow artifact, kept 90 days.
+
+**Pushing a `v*` tag also publishes the `.bin` as a GitHub Release asset**, which is what a device polls for
+over-the-air self-updates:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Only tags publish releases. A routine commit to `main` produces a downloadable artifact but never becomes an
+update candidate, so merging cannot flash every device on its own.
+
+Builds are stamped with `-DFW_VERSION` (see `src/version/version.h`): a tag builds as the tag, other builds as
+`main-<short sha>`, and a local build reports `dev`. The running firmware logs its version at boot.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Every project source file carries an `SPDX-License-Identifier: MIT` header.

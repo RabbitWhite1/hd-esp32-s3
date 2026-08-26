@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Zhanghan Wang
+
+# Builds the firmware image. Every push to main produces a downloadable artifact;
+# pushing a v* tag additionally publishes the .bin as a GitHub Release asset, which
+# is what the device polls for over-the-air self-updates. Tagging is deliberate --
+# an image only becomes an update candidate when you cut a tag, so a routine commit
+# to main can never flash every device by itself.
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # Pinned to the versions the firmware is developed against; bump deliberately.
+  FQBN: esp32:esp32:esp32s3:PSRAM=enabled,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB
+  CORE: esp32:esp32@3.3.11
+  LIBS: U8g2@2.36.19 ArduinoJson@7.4.3 SensorLib@0.4.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed only by the release step
+    steps:
+      - uses: actions/checkout@v4
+
+      # The sketch folder name must match the .ino name, and the checkout lands in
+      # a directory named after the repo -- hd-esp32-s3 -- so that already holds.
+      - name: Verify sketch/folder names agree
+        run: |
+          test -f hd-esp32-s3.ino || { echo "sketch not found"; exit 1; }
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      # The ESP32 core is a ~1 GB install; caching it turns a ~4 min step into ~20 s.
+      - name: Cache Arduino core + libraries
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-${{ env.CORE }}-${{ env.LIBS }}
+
+      - name: Install core + libraries
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install "$CORE" --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install $LIBS
+
+      # A tag builds as its own version; anything else is stamped with the short SHA
+      # so a downloaded artifact can always be traced back to a commit.
+      - name: Derive version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v="main-$(git rev-parse --short HEAD)"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building $v"
+
+      - name: Compile
+        run: |
+          arduino-cli compile --fqbn "$FQBN" \
+            --build-property "compiler.cpp.extra_flags=-DFW_VERSION=\"${{ steps.ver.outputs.version }}\"" \
+            --build-path "$PWD/build" \
+            --warnings default \
+            .
+          ls -l build/hd-esp32-s3.ino.bin
+          sha256sum build/hd-esp32-s3.ino.bin | tee build/hd-esp32-s3.ino.bin.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ steps.ver.outputs.version }}
+          path: |
+            build/hd-esp32-s3.ino.bin
+            build/hd-esp32-s3.ino.bin.sha256
+          retention-days: 90
+
+      # Only tags publish a release, so /releases/latest names an image that was
+      # deliberately shipped rather than whatever landed on main most recently.
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/hd-esp32-s3.ino.bin
+            build/hd-esp32-s3.ino.bin.sha256
+          generate_release_notes: true

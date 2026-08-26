@@ -4,6 +4,7 @@
 #include "src/bsp/ST7305_U8g2.h"
 #include "src/bsp/i2c_bsp.h"
 #include "src/bsp/codec_bsp.h"               // CodecPort
+#include "src/version/version.h"                 // FW_VERSION — stamped by CI
 #include "src/logging/logging.h"             // logDebug / logInfo / logWarn / logError
 #include "src/wifi_net/wifi_net.h"           // wifiBegin / wifiConnected / wifiIP / wifiSSID
 #include "src/time_sync/time_sync.h"         // timeBegin / timeFormatDateTime
@@ -519,6 +520,7 @@ void drawScreen() {
 void setup() {
   Serial.begin(115200);
   delay(300);
+  logInfo("hd-esp32-s3 firmware %s", FW_VERSION);
 
   lcd.begin(0, U8G2_R1);
   u8g2 = lcd.getU8g2();

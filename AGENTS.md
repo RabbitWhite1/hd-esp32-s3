@@ -36,6 +36,10 @@ Once a build with `ota.*` in it is running, **`./flash.sh`** does compile + uplo
 to `esp32.local` (pass a serial port — `./flash.sh /dev/ttyACM0` — to go over USB instead, which the first
 flash still needs).
 
+CI builds the same image on every push (`.github/workflows/firmware.yml`, pinned to core 3.3.11 + the
+library versions below); pushing a `v*` tag publishes the `.bin` as a Release asset for over-the-air
+self-update, and builds are stamped with `-DFW_VERSION` (`src/version/version.h`; `dev` when built locally).
+
 Required Arduino libraries (installed separately, not vendored): **U8g2**, **ArduinoJson**, **SensorLib** (provides `SensorPCF85063.hpp`). `WiFi`, `WiFiClientSecure`, `HTTPClient`, `SPI` ship with Arduino-ESP32. There is no test suite.
 
 ## Architecture
