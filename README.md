@@ -86,3 +86,17 @@ window and no secondary one, so only one gauge is drawn.
 
 See `CLAUDE.md` for architecture, the module/BSP layout, the pin map, and the list of persisted
 SD-card files.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Every project source file carries an `SPDX-License-Identifier: MIT` header.
+
+Two exceptions, both left unstamped because they are not this project's to license:
+
+- **`src/ExternLib/`** — Espressif's `esp_codec_dev` and `codec_board` components, vendored for the Arduino
+  build and licensed Apache-2.0 by their authors.
+- **`src/Music/canon.h`** — a generated PCM byte array of Canon in D.
+
+The two usage-panel icons (`clawd_icon.h`, `codex_icon.h`) are 1-bit renderings of the Claude and OpenAI
+marks, used to label whose quota each gauge shows. The MIT grant covers them as code; the marks belong to
+Anthropic and OpenAI respectively.
