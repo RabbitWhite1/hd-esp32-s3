@@ -18,7 +18,10 @@ static const char *GH_TOKEN_KEY = "gh_token";
 static const char *GH_REPO_DEFAULT = "RabbitWhite1/hd-esp32-s3";
 static const char *BIN_NAME = "hd-esp32-s3.ino.bin";
 
-static const int MAX_RELEASES = 10;
+// Newest-first, so this is the most recent N. GitHub allows per_page up to
+// 100; 64 keeps the dropdown and the filtered parse bounded while going far
+// enough back that an older build is still reachable.
+static const int MAX_RELEASES = 64;
 struct Release {
   String tag;
   uint32_t binId = 0;   // asset ids, not URLs: the asset endpoint is the one path
