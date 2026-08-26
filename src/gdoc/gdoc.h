@@ -16,10 +16,11 @@ const char *gdocLine(int i);  // i-th cached line ("" if out of range)
 const char *gdocTitle();      // document title (from the export filename); "" if unknown
 time_t gdocAsOf();            // wall-clock time of the last successful fetch (0 = never)
 
-// Pending diff: the lines that changed since the previously fetched revision
-// ("+ " added, "- " removed), accumulated across fetches until dismissed. Non-zero
-// count is what makes the sketch show the doc-update popup. The first successful
-// fetch after boot only seeds the snapshot, so it never reports a diff.
+// Pending diff: the added/edited lines of the newest revision, each as
+// "<line number> <text>", accumulated across fetches until dismissed (deletions
+// are not reported). Non-zero count is what makes the sketch show the doc-update
+// popup. The first successful fetch after boot only seeds the snapshot, so it
+// never reports a diff.
 int gdocDiffCount();              // number of pending changed lines (0 = nothing to show)
 const char *gdocDiffLine(int i);  // i-th changed line ("" if out of range)
 bool gdocDiffTruncated();         // true if more changes arrived than the buffer holds

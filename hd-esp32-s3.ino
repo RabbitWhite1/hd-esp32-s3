@@ -36,14 +36,17 @@
 #define DISP_W 400
 #define DISP_H 300
 
-// On-screen x centers of the three top-edge buttons. The header clock is drawn in
-// the fixed-width 6x13 font from x=12, and KEY (refresh) sits above its second
-// ':' (column 25) while BOOT sits above the closing ')' of the secondary time
-// (column 32) -- i.e. 165 and 207, a 42 px pitch that puts the third (power)
-// button at 249. Used to line an on-screen control up with the button that works it.
+// On-screen x centers of the three top-edge buttons, which run KEY, PWR, BOOT
+// from left to right. The header clock is drawn in the fixed-width 6x13 font from
+// x=12, and KEY (refresh) sits above its second ':' (column 25) while PWR sits
+// above the closing ')' of the secondary time (column 32) -- i.e. 165 and 207.
+// Extrapolating that 42 px pitch put BOOT at 249, which read a touch too far
+// left against the real button, so it is trimmed by eye: nudge BTN_BOOT_X alone
+// if the popup's [x] still doesn't line up. Used to line an on-screen control up
+// with the button that works it.
 #define BTN_KEY_X 165
-#define BTN_BOOT_X 207
-#define BTN_PWR_X 249
+#define BTN_PWR_X 207
+#define BTN_BOOT_X 257
 
 // One I2C bus shared by the SHTC3 sensor and the audio codec (scl=14, sda=13, port 0)
 I2cMasterBus I2cbus(14, 13, 0);
@@ -210,13 +213,19 @@ void drawDocBox(int x, int y, int w, int h) {
 // Popup listing what changed in the Google Doc since the previous revision. It is
 // drawn last, on top of whatever view is showing, so the normal screen stays
 // visible around it. The title bar carries a single [x] close control, placed at
-// BOOT's own x so it sits directly under the button that dismisses it (see
-// loop()); the popup is up for as long as gdocDiffCount() is non-zero, and a
-// further doc update just appends to the diff already waiting there.
+// BOOT's own x and against the screen's top edge so it sits directly under the
+// button that dismisses it (see loop()); the popup is up for as long as
+// gdocDiffCount() is non-zero, and a further doc update just appends to the diff
+// already waiting there.
 // Overflowing content ends in "..." rather than being silently cut.
 void drawDocPopup() {
-  const int w = 320, h = 180;
-  const int x = (DISP_W - w) / 2, y = (DISP_H - h) / 2;
+  const int w = 320;
+  const int y = 2;       // hugged to the top edge: the title bar's [x] then sits
+                         // just below the button that presses it, so the two read
+                         // as one control. The bottom edge stays where it was.
+  const int bottom = 240;
+  const int h = bottom - y;
+  const int x = (DISP_W - w) / 2;
   const int barH = 16;
 
   u8g2->setDrawColor(0);

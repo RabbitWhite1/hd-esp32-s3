@@ -108,33 +108,48 @@ bool gdocSetIntervalMin(int minutes) {
   return configSave();
 }
 
-// Append one "+ line" / "- line" entry to the pending diff, skipping duplicates
-// (a line deleted and re-added later would otherwise pile up).
-static void diffAdd(char mark, const String &line) {
-  String entry = String(mark) + " " + line;
+// Append one "<line number> <text>" entry to the pending diff, skipping duplicates
+// (a line deleted and re-added later would otherwise pile up). The number is the
+// line's 1-based position in the new revision, matching the Notes box.
+static void diffAdd(int lineNo, const String &line) {
+  String entry = String(lineNo) + " " + line;
   for (int i = 0; i < diffCount; i++)
     if (diffLines[i] == entry) return;
   if (diffCount < MAX_DIFF_LINES) diffLines[diffCount++] = entry;
   else diffTrunc = true;
 }
 
-static bool contains(const String *arr, int n, const String &s) {
-  for (int i = 0; i < n; i++)
-    if (arr[i] == s) return true;
-  return false;
-}
-
 // Diff the freshly parsed lines against the previous snapshot and accumulate the
-// changes (additions first, then removals), then make the new revision the
-// snapshot. Matching is by whole-line content anywhere in the other revision, so
-// merely reordering the document reports nothing. Blank lines are ignored.
+// changes, then make the new revision the snapshot. A line-level LCS decides which
+// lines are new (so an insert shifts the rest without reporting them), and only
+// the resulting lines *of the new revision* are kept -- an edit shows as its new
+// text, and a plain deletion shows nothing. Entries come out in line order because
+// the walk visits the new revision front to back. Blank lines take part in the
+// matching but are never emitted. MAX_DOC_LINES is small, so the (n+1)x(m+1) table
+// is trivial.
+static uint8_t lcs[MAX_DOC_LINES + 1][MAX_DOC_LINES + 1];
+
 static void diffAgainstPrev() {
   if (prevValid) {
     int before = diffCount;
-    for (int i = 0; i < lineCount; i++)
-      if (lines[i].length() && !contains(prevLines, prevCount, lines[i])) diffAdd('+', lines[i]);
-    for (int i = 0; i < prevCount; i++)
-      if (prevLines[i].length() && !contains(lines, lineCount, prevLines[i])) diffAdd('-', prevLines[i]);
+    for (int i = prevCount; i >= 0; i--)
+      for (int j = lineCount; j >= 0; j--) {
+        if (i == prevCount || j == lineCount) lcs[i][j] = 0;
+        else if (prevLines[i] == lines[j]) lcs[i][j] = lcs[i + 1][j + 1] + 1;
+        else lcs[i][j] = lcs[i + 1][j] > lcs[i][j + 1] ? lcs[i + 1][j] : lcs[i][j + 1];
+      }
+    int i = 0, j = 0;
+    while (i < prevCount || j < lineCount) {
+      if (i < prevCount && j < lineCount && prevLines[i] == lines[j]) {
+        i++;  // unchanged line, present in both
+        j++;
+      } else if (i < prevCount && (j == lineCount || lcs[i + 1][j] >= lcs[i][j + 1])) {
+        i++;  // dropped from the old revision -- nothing to show
+      } else {
+        if (lines[j].length()) diffAdd(j + 1, lines[j]);
+        j++;
+      }
+    }
     if (diffCount != before)
       logInfo("Doc changed: %d new line(s), %d pending", diffCount - before, diffCount);
   }
