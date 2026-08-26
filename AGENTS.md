@@ -40,6 +40,10 @@ CI builds the same image on every push (`.github/workflows/firmware.yml`, pinned
 library versions below); pushing a `v*` tag publishes the `.bin` as a Release asset for over-the-air
 self-update, and builds are stamped with `-DFW_VERSION` (`src/version/version.h`; `dev` when built locally).
 
+**Tagging is explicit.** "Commit" means just commit (and push if asked) — nothing more. Only create a `v*`
+tag when it is explicitly requested, because a tag is what publishes a GitHub Release and turns that image
+into an over-the-air update candidate the device will offer to install.
+
 Required Arduino libraries (installed separately, not vendored): **U8g2**, **ArduinoJson**, **SensorLib** (provides `SensorPCF85063.hpp`). `WiFi`, `WiFiClientSecure`, `HTTPClient`, `SPI` ship with Arduino-ESP32. There is no test suite.
 
 ## Architecture
