@@ -25,6 +25,18 @@ static String title = "";  // document title, parsed from the export filename
 static bool ok = false;
 static time_t asOf = 0;  // wall-clock time of the last successful fetch
 
+// Snapshot of the previously fetched revision, plus the diff accumulated against
+// it. prevValid stays false until the first successful fetch has been snapshotted,
+// so a fresh boot doesn't report the whole document as "new".
+static String prevLines[MAX_DOC_LINES];
+static int prevCount = 0;
+static bool prevValid = false;
+
+static const int MAX_DIFF_LINES = 24;  // bounded: the popup can't show more anyway
+static String diffLines[MAX_DIFF_LINES];
+static int diffCount = 0;
+static bool diffTrunc = false;
+
 // Keep printable ASCII and whole UTF-8 multi-byte sequences (so Chinese survives
 // for the GB2312-font Notes box); drop control bytes. Truncates on a character
 // boundary at MAX_LINE_LEN bytes so a multi-byte glyph is never split.
@@ -84,7 +96,7 @@ void gdocLoadUrl() {
 }
 
 static const char *GDOC_INTERVAL_KEY = "gdoc_refresh_min";
-static const int GDOC_INTERVAL_DEFAULT = 240;  // 4 hours
+static const int GDOC_INTERVAL_DEFAULT = 60;  // 1 hour
 
 int gdocIntervalMin() {
   long m = configGetInt(GDOC_INTERVAL_KEY, GDOC_INTERVAL_DEFAULT);
@@ -94,6 +106,58 @@ bool gdocSetIntervalMin(int minutes) {
   if (minutes < 1) minutes = 1;
   configSetInt(GDOC_INTERVAL_KEY, minutes);
   return configSave();
+}
+
+// Append one "+ line" / "- line" entry to the pending diff, skipping duplicates
+// (a line deleted and re-added later would otherwise pile up).
+static void diffAdd(char mark, const String &line) {
+  String entry = String(mark) + " " + line;
+  for (int i = 0; i < diffCount; i++)
+    if (diffLines[i] == entry) return;
+  if (diffCount < MAX_DIFF_LINES) diffLines[diffCount++] = entry;
+  else diffTrunc = true;
+}
+
+static bool contains(const String *arr, int n, const String &s) {
+  for (int i = 0; i < n; i++)
+    if (arr[i] == s) return true;
+  return false;
+}
+
+// Diff the freshly parsed lines against the previous snapshot and accumulate the
+// changes (additions first, then removals), then make the new revision the
+// snapshot. Matching is by whole-line content anywhere in the other revision, so
+// merely reordering the document reports nothing. Blank lines are ignored.
+static void diffAgainstPrev() {
+  if (prevValid) {
+    int before = diffCount;
+    for (int i = 0; i < lineCount; i++)
+      if (lines[i].length() && !contains(prevLines, prevCount, lines[i])) diffAdd('+', lines[i]);
+    for (int i = 0; i < prevCount; i++)
+      if (prevLines[i].length() && !contains(lines, lineCount, prevLines[i])) diffAdd('-', prevLines[i]);
+    if (diffCount != before)
+      logInfo("Doc changed: %d new line(s), %d pending", diffCount - before, diffCount);
+  }
+  for (int i = 0; i < lineCount; i++) prevLines[i] = lines[i];
+  for (int i = lineCount; i < prevCount; i++) prevLines[i] = "";  // release dropped lines
+  prevCount = lineCount;
+  prevValid = true;
+}
+
+int gdocDiffCount() {
+  return diffCount;
+}
+const char *gdocDiffLine(int i) {
+  if (i < 0 || i >= diffCount) return "";
+  return diffLines[i].c_str();
+}
+bool gdocDiffTruncated() {
+  return diffTrunc;
+}
+void gdocDiffClear() {
+  for (int i = 0; i < diffCount; i++) diffLines[i] = "";
+  diffCount = 0;
+  diffTrunc = false;
 }
 
 void gdocUpdate() {
@@ -153,6 +217,7 @@ void gdocUpdate() {
     start = nl + 1;
   }
   while (lineCount > 0 && lines[lineCount - 1].length() == 0) lineCount--;  // drop trailing blanks
+  diffAgainstPrev();  // collect what changed vs. the last revision (drives the popup)
   ok = true;
   asOf = time(nullptr);
   logInfo("Doc fetched: %d lines", lineCount);

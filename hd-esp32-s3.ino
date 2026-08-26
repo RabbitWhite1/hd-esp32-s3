@@ -36,6 +36,15 @@
 #define DISP_W 400
 #define DISP_H 300
 
+// On-screen x centers of the three top-edge buttons. The header clock is drawn in
+// the fixed-width 6x13 font from x=12, and KEY (refresh) sits above its second
+// ':' (column 25) while BOOT sits above the closing ')' of the secondary time
+// (column 32) -- i.e. 165 and 207, a 42 px pitch that puts the third (power)
+// button at 249. Used to line an on-screen control up with the button that works it.
+#define BTN_KEY_X 165
+#define BTN_BOOT_X 207
+#define BTN_PWR_X 249
+
 // One I2C bus shared by the SHTC3 sensor and the audio codec (scl=14, sda=13, port 0)
 I2cMasterBus I2cbus(14, 13, 0);
 CodecPort *codec = nullptr;
@@ -196,6 +205,53 @@ void drawDocBox(int x, int y, int w, int h) {
     }
   }
   u8g2->setMaxClipWindow();  // restore the full drawing area for the rest of the UI
+}
+
+// Popup listing what changed in the Google Doc since the previous revision. It is
+// drawn last, on top of whatever view is showing, so the normal screen stays
+// visible around it. The title bar carries a single [x] close control, placed at
+// BOOT's own x so it sits directly under the button that dismisses it (see
+// loop()); the popup is up for as long as gdocDiffCount() is non-zero, and a
+// further doc update just appends to the diff already waiting there.
+// Overflowing content ends in "..." rather than being silently cut.
+void drawDocPopup() {
+  const int w = 320, h = 180;
+  const int x = (DISP_W - w) / 2, y = (DISP_H - h) / 2;
+  const int barH = 16;
+
+  u8g2->setDrawColor(0);
+  u8g2->drawBox(x, y, w, h);  // punch a hole in the view underneath
+  u8g2->setDrawColor(1);
+  u8g2->drawFrame(x, y, w, h);
+  u8g2->drawFrame(x + 1, y + 1, w - 2, h - 2);  // double border so it reads as "on top"
+  u8g2->drawHLine(x + 1, y + barH, w - 2);
+
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(x + 6, y + 12, "Doc updated");
+
+  // Close control: a boxed cross centered on the BOOT button's column.
+  const int bs = 11;  // button box side
+  int bx = BTN_BOOT_X - bs / 2, by = y + (barH - bs) / 2;
+  u8g2->drawFrame(bx, by, bs, bs);
+  u8g2->drawLine(bx + 3, by + 3, bx + bs - 4, by + bs - 4);
+  u8g2->drawLine(bx + bs - 4, by + 3, bx + 3, by + bs - 4);
+
+  // Changed lines, in the GB2312 font so Chinese renders like the Notes box does.
+  u8g2->setFont(u8g2_font_wqy12_t_gb2312);
+  u8g2->setClipWindow(x + 2, y + barH + 1, x + w - 2, y + h - 2);
+  const int lineH = 14;
+  const int firstBase = y + barH + 13;
+  int rows = (y + h - 4 - firstBase) / lineH + 1;  // baselines that fit in the box
+  int n = gdocDiffCount();
+  bool more = (n > rows) || gdocDiffTruncated();
+  int shown = more ? rows - 1 : n;  // last row is given to the "..." marker
+  int ty = firstBase;
+  for (int i = 0; i < shown; i++) {
+    u8g2->drawUTF8(x + 6, ty, gdocDiffLine(i));
+    ty += lineH;
+  }
+  if (more) u8g2->drawUTF8(x + 6, ty, "...");
+  u8g2->setMaxClipWindow();
 }
 
 // A labeled 0-100% utilization bar: "<label> [===    ] NN%", drawn from (x, y).
@@ -426,6 +482,9 @@ void drawScreen() {
     u8g2->drawStr(mx, 294, wifiStatus());  // e.g. "Trying <ssid>" while wifiBegin() iterates
   } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
+  // Doc-update popup goes last so it overlays the view it interrupts.
+  if (gdocDiffCount() > 0) drawDocPopup();
+
   u8g2->sendBuffer();
 }
 
@@ -587,8 +646,15 @@ void loop() {
   if (b != bootPrev && millis() - bootLastChange > 40) {
     bootLastChange = millis();
     if (b == LOW) {
-      currentView = (currentView + 1) % VIEW_COUNT;
-      logInfo("BOOT pressed -> view %d", currentView);
+      // While the doc-update popup is up BOOT is its close button (the on-screen
+      // [x] is drawn right under it) instead of the view cycler.
+      if (gdocDiffCount() > 0) {
+        logInfo("BOOT pressed -> dismiss doc-update popup");
+        gdocDiffClear();
+      } else {
+        currentView = (currentView + 1) % VIEW_COUNT;
+        logInfo("BOOT pressed -> view %d", currentView);
+      }
       drawScreen();
     }
     bootPrev = b;
@@ -613,6 +679,7 @@ void loop() {
   if (now - lastGdoc >= gdocIntervalMin() * 60UL * 1000UL) {
     lastGdoc = now;
     gdocUpdate();
+    drawScreen();  // a fetch may have raised the doc-update popup; show it at once
   }
 
   if (now - lastSample >= SAMPLE_INTERVAL) {
