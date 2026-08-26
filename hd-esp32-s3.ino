@@ -17,6 +17,7 @@
 #include "src/codex_usage/codex_usage.h"    // codexUsageUpdate / codexPrimaryPercent — Codex (ChatGPT) limits
 #include "src/codex_usage/codex_icon.h"     // codex_icon_bits — OpenAI mark drawn left of the Codex gauges
 #include "src/gdoc/gdoc.h"                    // gdocUpdate / gdocLineCount / gdocLine — Google Doc notes
+#include "src/ota/ota.h"                     // otaBegin / otaHandle — LAN firmware updates
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
@@ -263,6 +264,22 @@ void drawDocPopup() {
   u8g2->setMaxClipWindow();
 }
 
+// Progress box shown while an OTA image is being received. loop() is parked inside
+// otaHandle() for the duration, so this is painted from the ota module's redraw
+// hook rather than the normal draw cadence.
+void drawOtaPopup() {
+  const int w = 260, h = 58;
+  const int x = (DISP_W - w) / 2, y = (DISP_H - h) / 2;
+  u8g2->setDrawColor(0);
+  u8g2->drawBox(x, y, w, h);
+  u8g2->setDrawColor(1);
+  u8g2->drawFrame(x, y, w, h);
+  u8g2->drawFrame(x + 1, y + 1, w - 2, h - 2);
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(x + 10, y + 20, otaStatus());
+  drawUsageBar(x + 10, y + 32, w - 20, "OTA", (float)otaPercent());
+}
+
 // A labeled 0-100% utilization bar: "<label> [===    ] NN%", drawn from (x, y).
 void drawUsageBar(int x, int y, int w, const char *label, float pct) {
   u8g2->setFont(u8g2_font_6x10_tf);
@@ -491,8 +508,10 @@ void drawScreen() {
     u8g2->drawStr(mx, 294, wifiStatus());  // e.g. "Trying <ssid>" while wifiBegin() iterates
   } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
-  // Doc-update popup goes last so it overlays the view it interrupts.
-  if (gdocDiffCount() > 0) drawDocPopup();
+  // Popups go last so they overlay the view they interrupt; an in-flight firmware
+  // update outranks the doc diff, which will still be waiting afterwards.
+  if (otaActive()) drawOtaPopup();
+  else if (gdocDiffCount() > 0) drawDocPopup();
 
   u8g2->sendBuffer();
 }
@@ -540,6 +559,8 @@ void setup() {
   drawScreen();
   wifiSetRedrawHook(drawScreen);  // let wifiBegin() show "Trying <ssid>" on the footer
   wifiBegin();
+  otaSetRedrawHook(drawScreen);  // let the OTA progress box paint while loop() is parked
+  otaBegin();                    // listen for `arduino-cli upload -p esp32.local` pushes
   timeBegin();
   drawScreen();
 
@@ -624,6 +645,7 @@ void refreshAll() {
 void loop() {
   wifiEnsureConnected();
   wifiLoop();   // tear down the first-time setup AP once a real network is joined
+  otaHandle();  // accept a LAN firmware push (also starts the listener once Wi-Fi is up)
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
   sdHotplugCheck();  // reload persisted data if the card was pulled + re-inserted
 
