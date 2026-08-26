@@ -15,6 +15,13 @@
 // public releases list and download anonymously.
 
 bool ghRefresh();                  // re-list releases over HTTPS (blocking); false on failure
+
+// Re-list only if the cache is empty or older than maxAgeSec. Page loads call
+// this so the picker tracks GitHub without a manual refresh, while the TTL keeps
+// the panel snappy -- every form submit re-renders the page, and unauthenticated
+// GitHub API calls are capped at 60/hour, so a fetch per render would both stall
+// the UI and burn through the limit. Returns true if the cache is usable.
+bool ghRefreshIfStale(unsigned long maxAgeSec);
 int ghCount();                     // cached releases, newest first
 const char *ghTag(int i);          // i-th release tag ("" out of range)
 uint32_t ghSize(int i);            // i-th release image size in bytes (0 if unknown)

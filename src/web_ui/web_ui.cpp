@@ -212,8 +212,9 @@ static void handleRoot() {
     "<h1 class='h3 mb-0'>hd panel</h1>";
 
   // Firmware picker, right-aligned on the title row: running version, the
-  // releases CI published, and Install. The list is served from the cached
-  // listing so a page load never waits on GitHub; the arrow re-lists on demand.
+  // releases CI published, and Install. Each page load re-lists if the cache has
+  // gone stale, so the dropdown tracks GitHub on its own; the arrow forces it.
+  ghRefreshIfStale(300);
   html += "<form method='post' action='/firmware' class='d-flex align-items-center gap-2'>"
           "<span class='text-muted small text-nowrap'>fw <code>";
   html += FW_VERSION;

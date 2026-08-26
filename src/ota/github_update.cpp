@@ -28,6 +28,7 @@ struct Release {
 static Release rels[MAX_RELEASES];
 static int relCount = 0;
 static time_t listedAt = 0;
+static unsigned long listedMs = 0;  // millis(), so staleness works before NTP lands
 static String lastError = "";
 
 static String repoName() {
@@ -67,6 +68,14 @@ static void addGhHeaders(HTTPClient &http, const char *accept) {
   String tok = configGet(GH_TOKEN_KEY);
   tok.trim();
   if (tok.length()) http.addHeader("Authorization", String("Bearer ") + tok);
+}
+
+bool ghRefreshIfStale(unsigned long maxAgeSec) {
+  bool fresh = listedMs && (millis() - listedMs < maxAgeSec * 1000UL);
+  if (fresh && relCount > 0) return true;
+  if (!wifiConnected()) return relCount > 0;  // offline: keep showing what we had
+  ghRefresh();  // a failure leaves the previous list in place
+  return relCount > 0;
 }
 
 bool ghRefresh() {
@@ -109,6 +118,7 @@ bool ghRefresh() {
     return false;
   }
 
+  listedMs = millis();  // stamp the attempt so a failing repo isn't retried per render
   relCount = 0;
   int published = doc.as<JsonArray>().size();
   String shaName = String(BIN_NAME) + ".sha256";
@@ -130,6 +140,7 @@ bool ghRefresh() {
     if (r.binId) rels[relCount++] = r;  // a release with no image is not installable
   }
   listedAt = time(nullptr);
+  listedMs = millis();
   if (relCount == 0) {
     // Distinguish "nothing published yet" from "published, but the CI asset is
     // missing" -- the fixes are entirely different (cut a tag vs. check the run).
@@ -142,61 +153,78 @@ bool ghRefresh() {
   return true;
 }
 
-// Open a release asset for reading. The asset endpoint answers with a 302 to a
-// signed storage URL, and that host rejects the request if the Authorization
-// header follows it -- so the redirect is walked here rather than by HTTPClient,
-// and the second hop is made clean.
-static bool openAsset(uint32_t id, WiFiClientSecure &c1, HTTPClient &h1,
-                      WiFiClientSecure &c2, HTTPClient &h2, HTTPClient *&out) {
-  String url = "https://api.github.com/repos/" + repoName() + "/releases/assets/" + String(id);
-  c1.setInsecure();
-  if (!h1.begin(c1, url)) {
+// Where an asset's bytes actually live. The asset endpoint answers with a 302 to
+// a signed storage URL, and that host rejects the request if the Authorization
+// header follows it -- so the redirect is walked by hand and the second hop is
+// made clean.
+struct AssetSource {
+  String url;
+  bool needAuth = false;  // true only if GitHub served the bytes inline (no redirect)
+};
+
+// Resolve the asset to a URL, tearing this connection down before returning.
+// Two live TLS sessions is enough to exhaust the heap on this part -- that shows
+// up as a bare "connection refused" (-1) on the second one -- so the resolve step
+// keeps its client in this scope and the download opens its own afterwards.
+static bool resolveAsset(uint32_t id, AssetSource &src) {
+  String api = "https://api.github.com/repos/" + repoName() + "/releases/assets/" + String(id);
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, api)) {
     lastError = "connection failed";
     return false;
   }
-  addGhHeaders(h1, "application/octet-stream");
-  h1.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  addGhHeaders(http, "application/octet-stream");
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   const char *loc[] = {"Location"};
-  h1.collectHeaders(loc, 1);
-  int code = h1.GET();
-  if (code == 200) {  // served inline, no redirect to follow
-    out = &h1;
-    return true;
-  }
-  if (code != 302 && code != 307) {
+  http.collectHeaders(loc, 1);
+  int code = http.GET();
+  bool ok = false;
+  if (code == 200) {
+    src.url = api;  // served inline; re-request it with the same headers
+    src.needAuth = true;
+    ok = true;
+  } else if (code == 302 || code == 307) {
+    src.url = http.header("Location");
+    src.needAuth = false;
+    ok = src.url.length() > 0;
+    if (!ok) lastError = "redirect carried no Location";
+  } else {
     lastError = "asset HTTP " + String(code);
-    h1.end();
+  }
+  http.end();
+  return ok;
+}
+
+// Open the resolved URL for reading. The caller owns the client/http pair, so
+// only one TLS session is ever live at a time.
+static bool openAsset(const AssetSource &src, WiFiClientSecure &client, HTTPClient &http) {
+  client.setInsecure();
+  if (!http.begin(client, src.url)) {
+    lastError = "connection failed";
     return false;
   }
-  String next = h1.header("Location");
-  h1.end();
-  if (!next.length()) {
-    lastError = "redirect carried no Location";
+  if (src.needAuth) addGhHeaders(http, "application/octet-stream");
+  else http.setUserAgent("hd-esp32-s3");  // the signed URL carries its own auth
+  int code = http.GET();
+  if (code != 200) {
+    lastError = "asset HTTP " + String(code) + " (heap " + String((unsigned)ESP.getFreeHeap()) + ")";
+    http.end();
     return false;
   }
-  c2.setInsecure();
-  if (!h2.begin(c2, next)) {
-    lastError = "redirect connection failed";
-    return false;
-  }
-  h2.setUserAgent("hd-esp32-s3");  // no Authorization: the signed URL carries its own
-  int code2 = h2.GET();
-  if (code2 != 200) {
-    lastError = "asset redirect HTTP " + String(code2);
-    h2.end();
-    return false;
-  }
-  out = &h2;
   return true;
 }
 
 // The .sha256 asset holds "<64 hex>  <filename>"; keep the digest.
 static bool fetchExpectedSha(uint32_t id, String &sha) {
-  WiFiClientSecure c1, c2;
-  HTTPClient h1, h2, *r = nullptr;
-  if (!openAsset(id, c1, h1, c2, h2, r)) return false;
-  String body = r->getString();
-  r->end();
+  AssetSource src;
+  if (!resolveAsset(id, src)) return false;
+  WiFiClientSecure client;
+  HTTPClient http;
+  if (!openAsset(src, client, http)) return false;
+  String body = http.getString();
+  http.end();
   body.trim();
   int sp = body.indexOf(' ');
   sha = (sp > 0) ? body.substring(0, sp) : body;
@@ -226,19 +254,22 @@ bool ghInstall(const String &tag) {
     return false;
   }
 
-  WiFiClientSecure c1, c2;
-  HTTPClient h1, h2, *r = nullptr;
-  if (!openAsset(rels[idx].binId, c1, h1, c2, h2, r)) return false;
-  int total = r->getSize();
+  AssetSource src;
+  if (!resolveAsset(rels[idx].binId, src)) return false;
+  logInfo("Downloading image (free heap %u)", (unsigned)ESP.getFreeHeap());
+  WiFiClientSecure client;
+  HTTPClient http;
+  if (!openAsset(src, client, http)) return false;
+  int total = http.getSize();
   if (total <= 0) total = (int)rels[idx].binSize;
   if (total <= 0) {
     lastError = "unknown image size";
-    r->end();
+    http.end();
     return false;
   }
   if (!Update.begin(total)) {
     lastError = "no room in the idle slot";
-    r->end();
+    http.end();
     return false;
   }
 
@@ -250,7 +281,7 @@ bool ghInstall(const String &tag) {
   mbedtls_sha256_init(&sha);
   mbedtls_sha256_starts(&sha, 0);  // 0 = SHA-256, not SHA-224
 
-  WiFiClient *stream = r->getStreamPtr();
+  WiFiClient *stream = http.getStreamPtr();
   uint8_t buf[1024];
   int written = 0, lastPct = -1;
   unsigned long lastData = millis();
@@ -277,7 +308,7 @@ bool ghInstall(const String &tag) {
       otaReport(true, pct, status.c_str());
     }
   }
-  r->end();
+  http.end();
 
   uint8_t digest[32];
   mbedtls_sha256_finish(&sha, digest);

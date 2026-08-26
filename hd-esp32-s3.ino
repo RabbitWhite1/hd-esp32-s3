@@ -509,6 +509,15 @@ void drawScreen() {
     u8g2->drawStr(mx, 294, wifiStatus());  // e.g. "Trying <ssid>" while wifiBegin() iterates
   } else u8g2->drawStr(mx, 294, "WiFi: disconnected");
 
+  // Firmware version, right-aligned on the same footer row: "dev" for a locally
+  // built image, the CI stamp (tag or main-<sha>) otherwise. Drawn last so it
+  // wins if a long SSID/IP line would otherwise reach this far.
+  int fwW = u8g2->getStrWidth(FW_VERSION);
+  u8g2->setDrawColor(0);
+  u8g2->drawBox(mx + lineW - fwW - 3, 287, fwW + 3, 9);  // clear a slot for it
+  u8g2->setDrawColor(1);
+  u8g2->drawStr(mx + lineW - fwW, 294, FW_VERSION);
+
   // Popups go last so they overlay the view they interrupt; an in-flight firmware
   // update outranks the doc diff, which will still be waiting afterwards.
   if (otaActive()) drawOtaPopup();
