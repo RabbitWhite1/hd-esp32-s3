@@ -635,7 +635,7 @@ static void handleRoot() {
           "style='background:rgba(0,0,0,.3);z-index:2000;'>"
           "<div class='position-absolute top-50 start-50 translate-middle text-center'>"
           "<div class='spinner-border text-light' style='width:3rem;height:3rem' role='status'></div>"
-          "<div class='text-light mt-2 fw-semibold'>Processing&hellip;</div></div></div>";
+          "<div id='busymsg' class='text-light mt-2 fw-semibold'>Processing&hellip;</div></div></div>";
 
   html += jsScript("/bootstrap.js", "bootstrap");
   html += jsScript("/sortable.js", "Sortable");
@@ -644,8 +644,30 @@ static void handleRoot() {
   // Submit every POST form via fetch() so saving never reloads the whole page:
   // show a toast from the JSON result, then swap just #app with fresh content.
   html += "<script>"
-          "function busyOn(){document.getElementById('busy').classList.remove('d-none');}"
+          "function busyOn(m){var e=document.getElementById('busymsg');"
+          "if(e)e.innerHTML=m||'Processing\u2026';"
+          "document.getElementById('busy').classList.remove('d-none');}"
           "function busyOff(){document.getElementById('busy').classList.add('d-none');}"
+          // A firmware install reboots the device mid-request, so the POST never
+          // answers and the browser sits on it instead of failing fast. Fire it
+          // and forget, then poll until the device serves pages again and reload
+          // into the new build. A failed install *does* answer -- that resolves
+          // first, cancels the poll, and shows the reason.
+          "function installFirmware(body){"
+          "busyOn('Installing firmware\u2026 the device will reboot');"
+          "var done=false;"
+          "fetch('/firmware',{method:'POST',headers:{'X-Requested-With':'fetch'},body:body})"
+          ".then(async function(r){var d={ok:false,msg:''};try{d=await r.json();}catch(e){}"
+          "done=true;busyOff();if(d.msg)showToast(!!d.ok,d.msg);await reloadApp();})"
+          ".catch(function(){});"
+          "var tries=0;"
+          "var iv=setInterval(function(){"
+          "if(done){clearInterval(iv);return;}"
+          "if(++tries>60){clearInterval(iv);busyOff();"
+          "showToast(false,'Device has not come back \u2014 check its screen');return;}"
+          "fetch('/?ping='+tries,{cache:'no-store'}).then(function(r){"
+          "if(r.ok&&!done){clearInterval(iv);location.reload();}}).catch(function(){});"
+          "},3000);}"
           // Point the Claude card's Save button at whichever tab's form is active.
           // Delegated on document so it survives the #app swap after each save.
           "document.addEventListener('shown.bs.tab',function(ev){"
@@ -759,6 +781,8 @@ static void handleRoot() {
           "if(f.id==='todoform')fillOrder('todolist','todoorderinput');"
           "var body=new URLSearchParams(new FormData(f));"
           "var s=ev.submitter;if(s&&s.name)body.append(s.name,s.value);"
+          "if(f.getAttribute('action')==='/firmware'&&s&&s.value==='install')"
+          "{installFirmware(body);return;}"
           "busyOn();"
           "try{var r=await fetch(f.getAttribute('action'),"
           "{method:'POST',headers:{'X-Requested-With':'fetch'},body:body});"
