@@ -34,6 +34,15 @@ const char *otaStatus() {
   return status.c_str();
 }
 
+// Same state the ArduinoOTA callbacks below drive, written from the pull side.
+// Redraws are throttled by the caller, which knows its own transfer size.
+void otaReport(bool isActive, int percent, const char *status) {
+  active = isActive;
+  ::percent = percent;
+  ::status = status ? status : "";
+  if (redrawHook) redrawHook();
+}
+
 void otaBegin() {
   if (started || !wifiConnected()) return;
   String pass = configGet(OTA_PASS_KEY);

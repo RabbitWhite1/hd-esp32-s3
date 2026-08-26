@@ -10,6 +10,8 @@
 #include "../sdcard/sdcard.h"              // persist the to-do list to /sdcard/todo.md
 #include "../asset_cache/asset_cache.h"    // serve Bootstrap from SD (offline-capable)
 #include "../history/history.h"            // temp/humidity ring buffer for the NOW chart
+#include "../ota/github_update.h"   // firmware release list + install
+#include "../version/version.h"      // FW_VERSION — shown next to the picker
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../time_sync/time_sync.h"        // select primary/secondary time zones from the form
 #include "../logging/logging.h"
@@ -206,7 +208,40 @@ static void handleRoot() {
     // Sticky header: the title + the two top-level tabs (Dashboard / Configuration)
     // stay pinned at the top together while the page scrolls.
     "<div class='sticky-top bg-body-tertiary pt-3 mb-3'>"
-    "<h1 class='h3 mb-2'>hd panel</h1>"
+    "<div class='d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2'>"
+    "<h1 class='h3 mb-0'>hd panel</h1>";
+
+  // Firmware picker, right-aligned on the title row: running version, the
+  // releases CI published, and Install. The list is served from the cached
+  // listing so a page load never waits on GitHub; the arrow re-lists on demand.
+  html += "<form method='post' action='/firmware' class='d-flex align-items-center gap-2'>"
+          "<span class='text-muted small text-nowrap'>fw <code>";
+  html += FW_VERSION;
+  html += "</code></span>"
+          "<select name='tag' class='form-select form-select-sm' style='width:auto'>";
+  if (ghCount() == 0) {
+    html += "<option value=''>";
+    html += ghListedAt() ? "(none found)" : "(not listed yet)";
+    html += "</option>";
+  } else {
+    for (int i = 0; i < ghCount(); i++) {
+      html += "<option value='";
+      html += ghTag(i);
+      html += "'>";
+      html += ghTag(i);
+      if (String(ghTag(i)) == String(FW_VERSION)) html += " (running)";
+      html += "</option>";
+    }
+  }
+  html += "</select>"
+          "<button class='btn btn-sm btn-outline-secondary' name='action' value='refresh' "
+          "title='Re-list releases from GitHub'>&#8635;</button>"
+          "<button class='btn btn-sm btn-outline-primary' name='action' value='install' ";
+  if (ghCount() == 0) html += "disabled ";
+  html += "title='Download and flash the selected release'>Install</button>"
+          "</form></div>";
+
+  html +=
     "<ul class='nav nav-tabs' id='maintabs' role='tablist'>"
     "<li class='nav-item'><button class='nav-link active' type='button' role='tab' "
     "data-bs-toggle='tab' data-bs-target='#tab-dashboard'>Dashboard</button></li>"
@@ -859,6 +894,27 @@ static void handleClaude() {
   respond(saved, saved ? "Claude credentials saved" : "Save failed (SD card?)");
 }
 
+// Firmware picker on the title row. "refresh" re-lists what CI published;
+// "install" streams the chosen image into the idle slot and reboots into it, so
+// a success reply is never actually delivered -- the browser sees the connection
+// drop mid-request, which is why the failure path is the only one that responds.
+static void handleFirmware() {
+  String action = server.hasArg("action") ? server.arg("action") : "";
+  if (action == "refresh") {
+    bool ok = ghRefresh();
+    respond(ok, ok ? ("Found " + String(ghCount()) + " release(s)")
+                   : ("Could not list releases: " + String(ghError())));
+    return;
+  }
+  String tag = server.hasArg("tag") ? server.arg("tag") : "";
+  if (!tag.length()) {
+    respond(false, "Pick a release first");
+    return;
+  }
+  ghInstall(tag);  // reboots on success
+  respond(false, "Install failed: " + String(ghError()));
+}
+
 static void handleGdoc() {
   if (!server.hasArg("url")) {
     respond(false, "No URL provided");
@@ -1183,6 +1239,7 @@ void webBegin() {
   server.on("/claude", HTTP_POST, handleClaude);
   server.on("/codex", HTTP_POST, handleCodex);            // token pasted into the web form
   server.on("/codextoken", HTTP_POST, handleCodexToken);  // token relayed by the cron one-liner
+  server.on("/firmware", HTTP_POST, handleFirmware);
   server.on("/gdoc", HTTP_POST, handleGdoc);
   server.on("/tz", HTTP_POST, handleTz);
   server.on("/intervals", HTTP_POST, handleIntervals);

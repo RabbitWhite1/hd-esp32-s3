@@ -16,6 +16,10 @@ void otaHandle();  // pump from loop(); also starts the listener once Wi-Fi come
 // update. Give the module a redraw hook (as wifi_net does) and it repaints the
 // progress box itself.
 void otaSetRedrawHook(void (*fn)());
+
+// Publish progress from an update this module didn't run -- the GitHub
+// pull-updater in this folder shares the LCD progress box with the push path.
+void otaReport(bool active, int percent, const char *status);
 bool otaActive();          // true while an image is being received
 int otaPercent();          // 0-100 progress of the running update
 const char *otaStatus();   // short status/error line for the LCD
