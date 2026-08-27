@@ -22,7 +22,7 @@
 #include "src/sdcard/sdcard.h"                // sdBegin / sdFormat / sdReadText / sdWriteText — microSD storage
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
-#include "src/history/history.h"             // historyAdd — temp/humidity ring buffer + CSV logging
+#include "src/history/history.h"             // historyAdd/historyAddBattery — per-year CSV logging
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -59,7 +59,7 @@ U8G2 *u8g2 = nullptr;
 
 const unsigned long SAMPLE_INTERVAL = 10 * 1000;
 const unsigned long SAMPLE_PRINT_INTERVAL = 10UL * 60 * 1000;  // log temp/humidity once per this span (a multiple of SAMPLE_INTERVAL)
-const unsigned long HISTORY_INTERVAL = 60UL * 1000;            // append one temp/humidity sample to the yearly CSV per minute
+const unsigned long HISTORY_INTERVAL = 60UL * 1000;            // append one temp/humidity + battery sample to the yearly CSVs per minute
 const unsigned long WEATHER_INTERVAL = 10UL * 60 * 1000;
 // Claude-usage, Codex-usage and Google-Doc refresh intervals are user-configurable
 // (minutes) and live in esp32.json — see claudeUsageIntervalMin() /
@@ -732,11 +732,15 @@ void loop() {
     if (gotReading && ++sampleCount % (SAMPLE_PRINT_INTERVAL / SAMPLE_INTERVAL) == 0)
       logInfo("Temperature: %.2f C  Humidity: %.2f %%", lastTemp, lastHum);
 
-    // Append a sample to the yearly CSV once a minute, but only after the clock
+    // Append a sample to the yearly CSVs once a minute, but only after the clock
     // is set so the timestamps are real wall-clock time.
-    if (gotReading && time(nullptr) > 1700000000 && now - lastHistory >= HISTORY_INTERVAL) {
+    if (time(nullptr) > 1700000000 && now - lastHistory >= HISTORY_INTERVAL) {
       lastHistory = now;
-      historyAdd(time(nullptr), lastTemp, lastHum);
+      time_t ts = time(nullptr);
+      if (gotReading) historyAdd(ts, lastTemp, lastHum);
+      // Battery has its own CSV, so it keeps being logged even on a boot where
+      // the SHTC3 never answers.
+      historyAddBattery(ts, batteryVoltage(), batteryPercent(), batteryCharging());
     }
     drawScreen();
   }

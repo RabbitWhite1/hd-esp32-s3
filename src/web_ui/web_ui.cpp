@@ -9,7 +9,8 @@
 #include "../weather/weather.h"            // add/remove weather cities (geocoded) from the form
 #include "../sdcard/sdcard.h"              // persist the to-do list to /sdcard/todo.md
 #include "../asset_cache/asset_cache.h"    // serve Bootstrap from SD (offline-capable)
-#include "../history/history.h"            // temp/humidity ring buffer for the NOW chart
+#include "../history/history.h"            // temp/humidity + battery series for the NOW charts
+#include "../battery/battery.h"            // live battery voltage/percent shown on the page
 #include "../ota/github_update.h"   // firmware release list + install
 #include "../version/version.h"      // FW_VERSION — shown next to the picker
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
@@ -263,14 +264,24 @@ static void handleRoot() {
   float tC = NAN, rh = NAN;
   bool haveSensor = sensorsPresent() && sensorsRead(&tC, &rh);
   html += cardOpen("now", "Now");
-  html += "<div class='d-flex gap-5'>"
+  html += "<div class='d-flex flex-wrap gap-5'>"
           "<div><div class='text-muted small'>Temperature</div><div class='fs-4'>";
   html += haveSensor ? (String(tC, 1) + " &deg;C") : String("--");
   html += "</div></div><div><div class='text-muted small'>Humidity</div><div class='fs-4'>";
   html += haveSensor ? (String(rh, 1) + " %") : String("--");
+  html += "</div></div><div><div class='text-muted small'>Battery</div><div class='fs-4'>";
+  if (batteryPercent() >= 0) {
+    html += String(batteryPercent()) + " %";
+    if (batteryCharging()) html += " <span class='badge text-bg-success align-middle'>charging</span>";
+  } else {
+    html += "--";
+  }
+  html += "</div></div><div><div class='text-muted small'>Voltage</div><div class='fs-4'>";
+  html += isnan(batteryVoltage()) ? String("--") : (String(batteryVoltage(), 2) + " V");
   html += "</div></div></div>";
-  // Trend chart (temperature + humidity), averaged over a selectable range +
-  // granularity. JS fills the inputs (local time) and queries /history.
+  // Trend charts (temperature, humidity, then battery % + voltage together on
+  // one dual-axis chart), averaged over a selectable range + granularity. JS
+  // fills the inputs (local time) and queries /history for all four series.
   html += "<div class='row g-2 align-items-end mt-2'>"
           "<div class='col-auto'><label class='form-label mb-0 small'>From</label>"
           "<input type='datetime-local' id='hfrom' class='form-control form-control-sm'></div>"
@@ -286,7 +297,8 @@ static void handleRoot() {
           "<div class='col-auto'><button id='happly' class='btn btn-sm btn-primary'>Apply</button></div>"
           "</div>"
           "<div class='mt-3' style='height:200px'><canvas id='thchart_t'></canvas></div>"
-          "<div class='mt-3' style='height:200px'><canvas id='thchart_h'></canvas></div>";
+          "<div class='mt-3' style='height:200px'><canvas id='thchart_h'></canvas></div>"
+          "<div class='mt-3' style='height:220px'><canvas id='thchart_b'></canvas></div>";
   html += cardClose;
 
   html += cardOpen("todo", "To-do",
@@ -711,6 +723,14 @@ static void handleRoot() {
           "if(mn<TEMP_MIN_C)lo=mn-0.1*Math.abs(mn);"
           "if(mx>TEMP_MAX_C)hi=mx+0.1*Math.abs(mx);}"
           "return {min:lo,max:hi};}"
+          // Voltage y-axis: the usable 18650 band, widened only where a reading
+          // (a charger pushing past 4.2 V, say) actually leaves it.
+          "var VOLT_MIN=3.0,VOLT_MAX=4.3;"
+          "function voltRange(a){var lo=VOLT_MIN,hi=VOLT_MAX,v=[];a=a||[];"
+          "for(var i=0;i<a.length;i++){if(a[i]!=null&&!isNaN(a[i]))v.push(a[i]);}"
+          "if(v.length){var mn=Math.min.apply(null,v),mx=Math.max.apply(null,v);"
+          "if(mn<VOLT_MIN)lo=mn-0.05;if(mx>VOLT_MAX)hi=mx+0.05;}"
+          "return {min:lo,max:hi};}"
           // Pick a 'nice' x-axis tick step (seconds) for the visible span, and
           // generate ticks aligned to local clock boundaries (00:00, 02:00, ...).
           "function stepFor(s){if(s<=4*3600)return 1800;if(s<=12*3600)return 3600;"
@@ -729,33 +749,53 @@ static void handleRoot() {
           "var ap=document.getElementById('happly');if(ap)ap.onclick=function(e){e.preventDefault();drawChart();};"
           "var bk=document.getElementById('hbucket');if(bk)bk.onchange=drawChart;"
           "drawChart();}"
-          // Build one line chart (single series + own y-axis) sharing the time x-axis.
-          "function buildChart(id,label,data,yr,color,unit,from,to,showDate){"
+          // Build one line chart over the shared time x-axis. `series` is a list of
+          // {label,data,color,unit,range}; a series carrying axis:'y1' hangs off a
+          // second y-axis drawn on the right, which is how battery % and voltage
+          // share a chart despite their different units.
+          "function buildChart(id,series,from,to,showDate){"
           "var cv=document.getElementById(id);if(!cv)return null;"
-          "return new Chart(cv,{type:'line',data:{datasets:[{label:label,data:data,"
-          "borderColor:color,backgroundColor:color,tension:.3,pointRadius:0}]},"
-          "options:{responsive:true,maintainAspectRatio:false,animation:false,"
-          "interaction:{intersect:false,mode:'index'},scales:{"
-          "x:{type:'linear',min:from,max:to,"
+          "var sc={x:{type:'linear',min:from,max:to,"
           "afterBuildTicks:function(ax){ax.ticks=makeTicks(from,to).map(function(v){return {value:v};});},"
           "ticks:{autoSkip:false,callback:function(v){var d=new Date(v*1000);"
-          "return showDate?(d.getMonth()+1)+'/'+d.getDate():pad(d.getHours())+':'+pad(d.getMinutes());}}},"
-          "y:{title:{display:true,text:unit},min:yr.min,max:yr.max}}}});}"
+          "return showDate?(d.getMonth()+1)+'/'+d.getDate():pad(d.getHours())+':'+pad(d.getMinutes());}}}};"
+          // Colour each y-axis like its series, so which scale is which is obvious.
+          // Only the left axis draws gridlines -- two sets would overlay each other.
+          "series.forEach(function(s){var a=s.axis||'y';"
+          "sc[a]={type:'linear',position:a==='y1'?'right':'left',min:s.range.min,max:s.range.max,"
+          "title:{display:true,text:s.unit,color:s.color},ticks:{color:s.color},"
+          "grid:{drawOnChartArea:a!=='y1'}};});"
+          "return new Chart(cv,{type:'line',data:{datasets:series.map(function(s){"
+          "return {label:s.label,data:s.data,borderColor:s.color,backgroundColor:s.color,"
+          "tension:.3,pointRadius:0,yAxisID:s.axis||'y'};})},"
+          "options:{responsive:true,maintainAspectRatio:false,animation:false,"
+          "interaction:{intersect:false,mode:'index'},scales:sc}});}"
           "async function drawChart(){if(typeof Chart==='undefined')return;"
           "if(!document.getElementById('thchart_t'))return;"
           "var f=Math.floor(new Date(document.getElementById('hfrom').value).getTime()/1000);"
           "var t=Math.floor(new Date(document.getElementById('hto').value).getTime()/1000);"
           "var b=document.getElementById('hbucket').value;if(!f||!t)return;"
           // Default to empty arrays so the axes still render when there's no data.
-          "var h={t:[],temp:[],hum:[],bucket:60};"
+          "var h={t:[],temp:[],hum:[],volt:[],batt:[],bucket:60};"
           "try{var j=await (await fetch('/history?from='+f+'&to='+t+'&bucket='+b,"
           "{headers:{'X-Requested-With':'fetch'}})).json();if(j&&j.t)h=j;}catch(e){}"
           "var showDate=stepFor(t-f)>=86400;"
           "var tp=h.t.map(function(s,i){return {x:s,y:h.temp[i]};});"
           "var hm=h.t.map(function(s,i){return {x:s,y:h.hum[i]};});"
+          "var bt=h.t.map(function(s,i){return {x:s,y:(h.batt||[])[i]};});"
+          "var vt=h.t.map(function(s,i){return {x:s,y:(h.volt||[])[i]};});"
           "if(window._thc)window._thc.destroy();if(window._thh)window._thh.destroy();"
-          "window._thc=buildChart('thchart_t','Temp \\u00b0C',tp,tempRange(h.temp),'#dc3545','\\u00b0C',f,t,showDate);"
-          "window._thh=buildChart('thchart_h','Humidity %',hm,{min:0,max:100},'#0d6efd','%',f,t,showDate);}"
+          "if(window._thb)window._thb.destroy();"
+          "window._thc=buildChart('thchart_t',[{label:'Temp \\u00b0C',data:tp,color:'#dc3545',"
+          "unit:'\\u00b0C',range:tempRange(h.temp)}],f,t,showDate);"
+          "window._thh=buildChart('thchart_h',[{label:'Humidity %',data:hm,color:'#0d6efd',"
+          "unit:'%',range:{min:0,max:100}}],f,t,showDate);"
+          // Battery % (left) and the raw voltage it was derived from (right), so
+          // the curve mapping one to the other can be eyeballed directly.
+          "window._thb=buildChart('thchart_b',[{label:'Battery %',data:bt,color:'#198754',"
+          "unit:'%',range:{min:0,max:100}},"
+          "{label:'Voltage V',data:vt,color:'#6f42c1',unit:'V',range:voltRange(h.volt),axis:'y1'}],"
+          "f,t,showDate);}"
           // Make a reorderable list drag-sortable; dropping only rearranges the DOM
           // and lights the Save button. Used for To-do, Wi-Fi, and weather lists.
           "function makeSortable(listId,btnId){var el=document.getElementById(listId);"
@@ -1204,8 +1244,9 @@ static void handleSave() {
   }
 }
 
-// GET /stats: machine-readable snapshot (date+time, temperature, humidity) for
-// curl/scripts. Values are null when unavailable (clock not synced / no sensor).
+// GET /stats: machine-readable snapshot (date+time, temperature, humidity,
+// battery percent/voltage/charging) for curl/scripts. Values are null when
+// unavailable (clock not synced / no sensor / no battery reading yet).
 static void handleStats() {
   float tC = NAN, rh = NAN;
   bool haveSensor = sensorsPresent() && sensorsRead(&tC, &rh);
@@ -1227,6 +1268,12 @@ static void handleStats() {
   j += haveSensor ? String(tC, 1) : String("null");
   j += ",\"humidity_pct\":";
   j += haveSensor ? String(rh, 1) : String("null");
+  j += ",\"battery_pct\":";
+  j += batteryPercent() >= 0 ? String(batteryPercent()) : String("null");
+  j += ",\"battery_v\":";
+  j += isnan(batteryVoltage()) ? String("null") : String(batteryVoltage(), 3);
+  j += ",\"charging\":";
+  j += batteryCharging() ? "true" : "false";
   j += "}\n";
   server.send(200, "application/json", j);
 }
@@ -1240,15 +1287,27 @@ static long bucketSeconds(const String &b) {
   return 3600;
 }
 
-// GET /history?from=<epoch>&to=<epoch>&bucket=<name>: averaged temp/humidity over
-// the range, as JSON for the NOW chart (defaults to the last 24 h, hourly).
+// GET /history?from=<epoch>&to=<epoch>&bucket=<name>: averaged temp/humidity +
+// battery percent/voltage over the range, as JSON for the NOW charts (defaults
+// to the last 24 h, hourly).
+// Sink for historyQuery(): each piece goes straight out to the client.
+static void emitHistoryChunk(const String &chunk, void *ctx) {
+  ((WebServer *)ctx)->sendContent(chunk);
+}
+
 static void handleHistory() {
   time_t to = server.hasArg("to") ? (time_t)server.arg("to").toInt() : 0;
   time_t from = server.hasArg("from") ? (time_t)server.arg("from").toInt() : 0;
   long bs = bucketSeconds(server.hasArg("bucket") ? server.arg("bucket") : "hourly");
   if (to <= 0) to = time(nullptr);
   if (from <= 0) from = to - 86400;
-  server.send(200, "application/json", historyQuery(from, to, bs));
+  // Chunked: the body runs to tens of KB over a long range, which is more than
+  // the heap will hand out in one block once Wi-Fi/TLS have taken their share,
+  // so it is streamed rather than assembled (see historyQuery).
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "application/json", "");
+  historyQuery(from, to, bs, emitHistoryChunk, &server);
+  server.sendContent("");  // zero-length chunk terminates the response
 }
 
 void webBegin() {
@@ -1259,7 +1318,7 @@ void webBegin() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/favicon.ico", HTTP_GET, handleFavicon);  // embedded star icon
   server.on("/stats", HTTP_GET, handleStats);    // curl-friendly JSON snapshot
-  server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW chart
+  server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW charts
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
   server.on("/codex", HTTP_POST, handleCodex);            // token pasted into the web form
