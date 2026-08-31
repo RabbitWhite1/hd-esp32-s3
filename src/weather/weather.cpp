@@ -9,6 +9,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <atomic>
 #include <math.h>
 
 static const int MAX_CITIES = 16;   // how many cities may be configured
@@ -68,7 +69,7 @@ struct Forecast {
 };
 static Forecast staged[SHOWN_CITIES];
 static int stagedCount = 0;
-static volatile bool pending = false;
+static std::atomic<uint32_t> pending{0};
 
 static bool fetchWeather(const City &c, Forecast &f) {
   if (!wifiConnected()) return false;
@@ -103,6 +104,9 @@ static bool fetchWeather(const City &c, Forecast &f) {
 }
 
 void weatherFetch() {
+  // Do not overwrite the single staged slot until the loop task has consumed it.
+  if (pending.load(std::memory_order_acquire)) return;
+
   // Only the top SHOWN_CITIES are displayed on the LCD, so only those are fetched.
   int n = cityCount < SHOWN_CITIES ? cityCount : SHOWN_CITIES;
   for (int i = 0; i < n; i++) {
@@ -112,13 +116,13 @@ void weatherFetch() {
     fetchWeather(cities[i], staged[i]);
   }
   stagedCount = n;
-  pending = true;
+  pending.store(1, std::memory_order_release);
 }
 
 // Promote staged forecasts onto the cities they were actually fetched for. Runs
 // on the loop task, which is also the only writer of the city list.
 bool weatherCommit() {
-  if (!pending) return false;
+  if (!pending.load(std::memory_order_acquire)) return false;
   bool changed = false;
   for (int i = 0; i < stagedCount && i < cityCount; i++) {
     if (!staged[i].ok) continue;
@@ -132,7 +136,7 @@ bool weatherCommit() {
     cities[i].ok = true;
     changed = true;
   }
-  pending = false;
+  pending.store(0, std::memory_order_release);
   return changed;
 }
 

@@ -25,6 +25,7 @@
 #include "src/history/history.h"             // historyAdd/historyAddBattery — per-year CSV logging
 #include "src/ota/github_update.h"            // ghLoadCache — restore the release list from SD at boot
 #include "src/netsync/netsync.h"             // locks + version counter shared with the fetch task
+#include <atomic>
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -540,29 +541,38 @@ static const uint32_t FETCH_STACK = 10 * 1024;  // mbedTLS needs room; the loop 
 
 // Set to force a feed on the next tick, cleared only once it has actually run --
 // so a feed skipped because the web UI held the radio is simply retried.
-static volatile bool forceWeather = false, forceClaude = false, forceCodex = false, forceGdoc = false;
-static volatile bool refreshInFlight = false;
-static volatile bool refreshChimePending = false;  // armed only by a KEY-requested refresh
+static std::atomic<uint32_t> forceWeather{0}, forceClaude{0}, forceCodex{0}, forceGdoc{0};
+static std::atomic<uint32_t> refreshInFlight{0};
+static std::atomic<uint32_t> refreshChimePending{0};  // armed only by a KEY-requested refresh
 
 // Ask for every feed to be refreshed now. Returns immediately; the task does the
 // work. Only an explicit KEY press asks for audible completion feedback; Wi-Fi
 // reconnect refreshes and every scheduled/background update stay silent.
 void requestRefreshAll(bool chimeWhenDone = false) {
-  forceWeather = forceClaude = forceCodex = forceGdoc = true;
-  refreshInFlight = true;
-  if (chimeWhenDone) refreshChimePending = true;
+  forceWeather.store(1, std::memory_order_release);
+  forceClaude.store(1, std::memory_order_release);
+  forceCodex.store(1, std::memory_order_release);
+  forceGdoc.store(1, std::memory_order_release);
+  refreshInFlight.store(1, std::memory_order_release);
+  if (chimeWhenDone) refreshChimePending.store(1, std::memory_order_release);
 }
 
 // Run one feed if it is due or forced. Returns true if it actually ran, so the
 // caller can stop after one -- see fetchTask().
-static bool maybeFetch(volatile bool *force, unsigned long *stamp, unsigned long intervalMs,
+static bool maybeFetch(std::atomic<uint32_t> *force, unsigned long *stamp, unsigned long intervalMs,
                        void (*fn)()) {
-  if (!*force && millis() - *stamp < intervalMs) return false;
+  // Claim only the request that already exists. A new request arriving while fn()
+  // runs sets the flag again and will be handled on a later tick.
+  bool forced = force->load(std::memory_order_acquire) != 0;
+  if (!forced && millis() - *stamp < intervalMs) return false;
+  if (forced) forced = force->exchange(0, std::memory_order_acq_rel) != 0;
   NetGuard net(NET_TRY_MS);
-  if (!net.ok) return false;  // the web UI is mid-TLS; try again next tick
+  if (!net.ok) {
+    if (forced) force->store(1, std::memory_order_release);
+    return false;  // the web UI is mid-TLS; try again next tick
+  }
   fn();  // stages a result; loop() promotes it in the drain below
   *stamp = millis();
-  *force = false;
   return true;
 }
 
@@ -577,8 +587,12 @@ static void fetchTask(void *) {
           maybeFetch(&forceCodex, &lastCodexUsage, codexUsageIntervalMin() * 60UL * 1000UL, codexUsageFetch) ||
           maybeFetch(&forceWeather, &lastWeather, WEATHER_INTERVAL, weatherFetch) ||
           maybeFetch(&forceGdoc, &lastGdoc, gdocIntervalMin() * 60UL * 1000UL, gdocFetch);
-      if (refreshInFlight && !forceWeather && !forceClaude && !forceCodex && !forceGdoc)
-        refreshInFlight = false;
+      if (refreshInFlight.load(std::memory_order_acquire) &&
+          !forceWeather.load(std::memory_order_acquire) &&
+          !forceClaude.load(std::memory_order_acquire) &&
+          !forceCodex.load(std::memory_order_acquire) &&
+          !forceGdoc.load(std::memory_order_acquire))
+        refreshInFlight.store(0, std::memory_order_release);
     }
     vTaskDelay(pdMS_TO_TICKS(FETCH_TICK_MS));
   }
@@ -772,11 +786,12 @@ void loop() {
   if (gdocCommit()) changed = true;
   if (changed) drawScreen();
 
-  if (wasRefreshing && !refreshInFlight && refreshChimePending) {
-    refreshChimePending = false;
+  const bool refreshing = refreshInFlight.load(std::memory_order_acquire) != 0;
+  if (wasRefreshing && !refreshing &&
+      refreshChimePending.exchange(0, std::memory_order_acq_rel)) {
     playChimeLong();  // only a user-requested refresh gets completion feedback
   }
-  wasRefreshing = refreshInFlight;
+  wasRefreshing = refreshing;
 
   if (now - lastSample >= SAMPLE_INTERVAL) {
     lastSample = now;

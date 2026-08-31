@@ -7,6 +7,7 @@
 #include "../logging/logging.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <atomic>
 
 // Link-shared Google Doc, fetched as plain text. The "export?format=txt" endpoint
 // 307-redirects to a signed googleusercontent.com host, so redirect-following must
@@ -41,7 +42,7 @@ static bool stagedHaveTitle = false;
 static bool stagedOk = false;
 static bool stagedLinesValid = false;  // false after a failed fetch: keep the old text
 static time_t stagedAsOf = 0;
-static volatile bool pending = false;
+static std::atomic<uint32_t> pending{0};
 static int prevCount = 0;
 static bool prevValid = false;
 
@@ -191,6 +192,9 @@ void gdocDiffClear() {
 }
 
 void gdocFetch() {
+  // Do not overwrite the single staged slot until the loop task has consumed it.
+  if (pending.load(std::memory_order_acquire)) return;
+
   if (!wifiConnected() || docUrl.length() == 0) return;
   stagedHaveTitle = false;
   WiFiClientSecure client;
@@ -212,7 +216,7 @@ void gdocFetch() {
     http.end();
     stagedOk = false;
     stagedLinesValid = false;  // keep whatever text is already on screen
-    pending = true;
+    pending.store(1, std::memory_order_release);
     return;
   }
   // The title rides along as the download filename, e.g.
@@ -258,7 +262,7 @@ void gdocFetch() {
   stagedAsOf = time(nullptr);
   stagedOk = true;
   stagedLinesValid = true;
-  pending = true;
+  pending.store(1, std::memory_order_release);
   logInfo("Doc fetched: %d lines", stagedCount);
 }
 
@@ -266,7 +270,7 @@ void gdocFetch() {
 // loop task, the only reader of lines[]/diffLines[], so the swap needs no lock
 // and the renderer never sees a half-replaced document.
 bool gdocCommit() {
-  if (!pending) return false;
+  if (!pending.load(std::memory_order_acquire)) return false;
   if (stagedLinesValid) {
     for (int i = 0; i < stagedCount; i++) lines[i] = stagedLines[i];
     for (int i = stagedCount; i < lineCount; i++) lines[i] = "";  // release dropped lines
@@ -276,7 +280,7 @@ bool gdocCommit() {
     asOf = stagedAsOf;
   }
   ok = stagedOk;
-  pending = false;
+  pending.store(0, std::memory_order_release);
   return true;
 }
 
