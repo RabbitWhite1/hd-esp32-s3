@@ -326,7 +326,7 @@ static void handleRoot() {
     html += "'>&times;</button></div>";
   }
   html += "</div>";
-  // "+" adds a blank row (a server round-trip that also preserves current edits).
+  // "+" adds a blank row at the top (a server round-trip that also preserves current edits).
   if (todoCount < MAX_TODOS)
     html += "<button class='btn btn-outline-secondary' type='submit' name='action' value='add'>+ Add row</button>";
   html += "</form>";
@@ -1215,8 +1215,11 @@ static void handleSave() {
   String action = server.hasArg("action") ? server.arg("action") : "save";
   if (action == "add") {
     if (todoCount < MAX_TODOS) {
-      todos[todoCount].text = "";
-      todos[todoCount].done = false;
+      // Insert at the top: a just-thought-of item is the one you want in front,
+      // and it saves dragging it up past a long list every time.
+      for (int j = todoCount; j > 0; j--) todos[j] = todos[j - 1];
+      todos[0].text = "";
+      todos[0].done = false;
       todoCount++;
     }
     respond(true, "");  // empty msg -> no toast, just refresh the list with the new row
