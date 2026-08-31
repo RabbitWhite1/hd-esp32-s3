@@ -91,65 +91,62 @@ SD-card files.
 
 Network feeds are fetched on their own FreeRTOS task so a refresh never parks the UI. The two tasks
 share no mutable data: the fetch task writes a private staging slot per feed, and the loop task
-promotes it. Every value the renderer reads is therefore written by the thread that reads it, which
-is why there is no lock around the display or the cached feed values.
+promotes it. Every value the renderer reads is written by the thread that reads it, which is why
+there is no lock around the display or the cached feed values.
 
-```mermaid
-flowchart TB
-    subgraph FETCH["fetch task — owns the network"]
-        direction TB
-        TICK["wake every 200 ms"]
-        LOCK{"netTryLock 50 ms"}
-        DOFETCH["xFetch() — one feed per wake"]
-        TICK --> LOCK
-        LOCK -- "busy: web UI has the radio" --> TICK
-        LOCK -- "acquired" --> DOFETCH
-    end
-
-    STAGE["staging slot per feed<br/>claude · codex · weather · gdoc"]
-
-    subgraph LOOP["loop task — owns the data and the display"]
-        direction TB
-        IO["buttons · web · OTA · sensors<br/>stay responsive throughout"]
-        COMMIT["xCommit() on all four feeds"]
-        DRAW["drawScreen()"]
-        LCD["ST7305 LCD"]
-        COMMIT -- "anything promoted" --> DRAW
-        DRAW --> LCD
-    end
-
-    DOFETCH -- "writes slot, sets pending" --> STAGE
-    STAGE -- "promotes to live, clears pending" --> COMMIT
-    IO -- "KEY press / Wi-Fi up: set force flags" --> TICK
-```
-
-The only thing the two tasks still share is the **network lock**, which serialises TLS: two
-`WiFiClientSecure` contexts alive at once exhaust the heap. The web UI opens its own connections on
-the loop task (listing GitHub releases), so the lock is taken asymmetrically — background
-polling tries for 50 ms and retries on its next wake, while anything you triggered waits for the
-radio. Interactive work never queues behind a background refresh. The same lock guards the settings
-the fetch task reads (the doc URL, credentials, city coordinates) against the web handlers that
-write them.
-
-A KEY press is a request, not a blocking call. The screen fills in one feed at a time as results
-land, rather than all at once when the last fetch returns:
+The one thing the tasks still share is the **network lock**, which serialises TLS — two
+`WiFiClientSecure` contexts alive at once exhaust the heap. It is taken asymmetrically: background
+polling tries for 50 ms and gives up until its next wake, while anything you triggered waits for the
+radio. Interactive work never queues behind a background refresh, only the other way round. The same
+lock guards the settings the fetch task reads (the doc URL, credentials, city coordinates) against
+the web handlers that write them.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant KEY as KEY button
+    actor USER as You
+    participant WEB as Browser
     participant MAIN as loop task
+    participant SENS as SHTC3 + battery
+    participant SD as microSD
+    participant LCD as ST7305 LCD
     participant FETCH as fetch task
-    participant LCD as LCD
-    KEY->>MAIN: press
-    MAIN->>MAIN: playChimeShort, set force flags
+    participant LOCK as network lock
+
+    Note over MAIN,SD: at boot: releases.tsv restored, feeds fetched inline, then the fetch task starts
+
+    Note over USER,LOCK: every loop iteration, a few milliseconds
+    MAIN->>SENS: sample every 10 s
+    SENS-->>MAIN: temperature, humidity, cell voltage
+    MAIN->>SD: append one row per minute to the yearly CSVs
+    MAIN->>MAIN: xCommit on claude, codex, weather, gdoc
+    MAIN->>LCD: drawScreen, but only if a feed was promoted
+    MAIN->>MAIN: webHandle and otaHandle stay responsive throughout
+
+    Note over USER,LOCK: you press KEY (a Wi-Fi reconnect does the same)
+    USER->>MAIN: KEY press
+    MAIN->>MAIN: playChimeShort, set all four force flags
     loop one feed per 200 ms wake
-        FETCH->>FETCH: netTryLock, then xFetch
-        FETCH--)MAIN: staged, pending = true
-        MAIN->>LCD: xCommit, then drawScreen
+        FETCH->>LOCK: netTryLock, 50 ms
+        alt radio free
+            LOCK-->>FETCH: granted
+            FETCH->>FETCH: xFetch over HTTPS
+            FETCH--)MAIN: staged, pending = true
+            MAIN->>LCD: xCommit, then drawScreen
+        else loop task is mid-TLS
+            LOCK-->>FETCH: denied, retry on the next wake
+        end
     end
-    FETCH->>MAIN: all force flags clear
+    FETCH--)MAIN: last force flag cleared
     MAIN->>MAIN: playChimeLong
+
+    Note over USER,LOCK: someone opens the web panel
+    WEB->>MAIN: GET /
+    MAIN->>LOCK: netLock, waits for the radio
+    LOCK-->>MAIN: granted, the fetch task backs off
+    MAIN->>MAIN: re-list GitHub releases if the cached list is stale
+    MAIN->>SD: rewrite releases.tsv on a successful listing
+    MAIN-->>WEB: page, firmware picker filled from the cache either way
 ```
 
 Pressing KEY again mid-refresh **coalesces** rather than queueing: the force flags are booleans, so a
