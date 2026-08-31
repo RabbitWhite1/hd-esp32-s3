@@ -5,6 +5,7 @@
 #include "../wifi_net/wifi_net.h"
 #include "../config/config.h"  // URL + refresh interval persisted in esp32.json
 #include "../logging/logging.h"
+#include "../netsync/netsync.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
@@ -170,6 +171,7 @@ bool gdocDiffTruncated() {
   return diffTrunc;
 }
 void gdocDiffClear() {
+  DataGuard g;  // BOOT press on the loop task vs. diffAgainstPrev() on the fetch task
   for (int i = 0; i < diffCount; i++) diffLines[i] = "";
   diffCount = 0;
   diffTrunc = false;
@@ -177,6 +179,8 @@ void gdocDiffClear() {
 
 void gdocUpdate() {
   if (!wifiConnected() || docUrl.length() == 0) return;
+  String newTitle;        // committed with the lines below, not written in place
+  bool haveTitle = false;
   WiFiClientSecure client;
   client.setInsecure();  // skip cert validation (same approach as the weather fetch)
 
@@ -207,7 +211,8 @@ void gdocUpdate() {
     if (e > s) {
       String t = cd.substring(s, e);
       if (t.endsWith(".txt")) t = t.substring(0, t.length() - 4);
-      title = sanitize(t);
+      newTitle = sanitize(t);
+      haveTitle = true;
     }
   }
   String payload = http.getString();
@@ -221,20 +226,36 @@ void gdocUpdate() {
   // Split on newlines, keeping blank lines (they separate paragraphs) but
   // collapsing a run of consecutive blanks into a single blank — the Google txt
   // export emits two blank lines per paragraph gap. Trailing blanks are dropped.
-  lineCount = 0;
+  // Parse into scratch rather than straight into lines[]. drawScreen() may be
+  // rendering the doc view on the loop task right now, and gdocLine() hands it
+  // String::c_str() pointers into lines[] -- rewriting in place would free a
+  // buffer out from under the renderer. MAX_DOC_LINES is 12, so the copy is free.
+  String scratch[MAX_DOC_LINES];
+  int scratchCount = 0;
   int start = 0;
-  while (start <= (int)payload.length() && lineCount < MAX_DOC_LINES) {
+  while (start <= (int)payload.length() && scratchCount < MAX_DOC_LINES) {
     int nl = payload.indexOf('\n', start);
     String s = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
-    bool prevBlank = (lineCount > 0 && lines[lineCount - 1].length() == 0);
-    if (s.length() > 0 || !prevBlank) lines[lineCount++] = s;  // skip a 2nd+ consecutive blank
+    bool prevBlank = (scratchCount > 0 && scratch[scratchCount - 1].length() == 0);
+    if (s.length() > 0 || !prevBlank) scratch[scratchCount++] = s;  // skip a 2nd+ consecutive blank
     if (nl < 0) break;
     start = nl + 1;
   }
-  while (lineCount > 0 && lines[lineCount - 1].length() == 0) lineCount--;  // drop trailing blanks
-  diffAgainstPrev();  // collect what changed vs. the last revision (drives the popup)
-  ok = true;
-  asOf = time(nullptr);
+  while (scratchCount > 0 && scratch[scratchCount - 1].length() == 0) scratchCount--;  // drop trailing blanks
+
+  // Commit: swap the parsed revision in and diff it, with the renderer locked
+  // out. Everything here is in-memory and bounded, so the display stalls for
+  // microseconds rather than for the length of the fetch above.
+  {
+    DataGuard g;
+    for (int i = 0; i < scratchCount; i++) lines[i] = scratch[i];
+    for (int i = scratchCount; i < lineCount; i++) lines[i] = "";  // release dropped lines
+    lineCount = scratchCount;
+    if (haveTitle) title = newTitle;
+    diffAgainstPrev();  // collect what changed vs. the last revision (drives the popup)
+    ok = true;
+    asOf = time(nullptr);
+  }
   logInfo("Doc fetched: %d lines", lineCount);
 }
 

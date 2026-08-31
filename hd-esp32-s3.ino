@@ -23,6 +23,7 @@
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
 #include "src/history/history.h"             // historyAdd/historyAddBattery — per-year CSV logging
+#include "src/netsync/netsync.h"             // locks + version counter shared with the fetch task
 
 // ---------- RLCD SPI pins ----------
 #define RLCD_SCK_PIN 11
@@ -476,6 +477,10 @@ void drawSdcardIcon(int x, int y, bool present) {
 }
 
 void drawScreen() {
+  // The fetch task rewrites the cached feeds while we read them, and getters
+  // like gdocLine() hand back interior pointers, so the whole compose+flush runs
+  // under the data lock. A commit is microseconds, so the task barely waits.
+  DataGuard dg;
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
   char buf[80];
@@ -526,10 +531,66 @@ void drawScreen() {
   u8g2->sendBuffer();
 }
 
+// ---------- background fetch task ----------
+// Every network feed used to be fetched inline from loop(), which parked the
+// whole UI for the length of four blocking HTTPS round trips: buttons went dead,
+// the web panel stopped answering, and the screen showed stale data throughout.
+// The fetches now run here; loop() keeps drawing, polling buttons and serving
+// HTTP, and repaints whenever this task commits something new.
+static const uint32_t FETCH_TICK_MS = 200;
+static const uint32_t NET_TRY_MS = 50;  // background: glance at the radio, don't wait for it
+static const uint32_t FETCH_STACK = 10 * 1024;  // mbedTLS needs room; the loop task gets 8K
+
+// Set to force a feed on the next tick, cleared only once it has actually run --
+// so a feed skipped because the web UI held the radio is simply retried.
+static volatile bool forceWeather = false, forceClaude = false, forceCodex = false, forceGdoc = false;
+static volatile bool refreshInFlight = false;  // loop() chimes on the falling edge
+
+// Ask for every feed to be refreshed now. Returns immediately; the task does the
+// work. Used by the KEY button and the on-(re)connect trigger in loop().
+void requestRefreshAll() {
+  forceWeather = forceClaude = forceCodex = forceGdoc = true;
+  refreshInFlight = true;
+}
+
+// Run one feed if it is due or forced. Returns true if it actually ran, so the
+// caller can stop after one -- see fetchTask().
+static bool maybeFetch(volatile bool *force, unsigned long *stamp, unsigned long intervalMs,
+                       void (*fn)()) {
+  if (!*force && millis() - *stamp < intervalMs) return false;
+  NetGuard net(NET_TRY_MS);
+  if (!net.ok) return false;  // the web UI is mid-TLS; try again next tick
+  fn();
+  *stamp = millis();
+  *force = false;
+  dataBump();  // tell loop() there is new state worth drawing
+  return true;
+}
+
+static void fetchTask(void *) {
+  for (;;) {
+    // At most ONE feed per wake, so the network lock is released in between and
+    // an interactive TLS call (the web UI's GitHub requests) gets a turn instead
+    // of queueing behind a whole refresh round. `||` short-circuits after the
+    // first one that runs.
+    if (wifiConnected()) {
+      maybeFetch(&forceClaude, &lastClaudeUsage, claudeUsageIntervalMin() * 60UL * 1000UL, claudeUsageUpdate) ||
+          maybeFetch(&forceCodex, &lastCodexUsage, codexUsageIntervalMin() * 60UL * 1000UL, codexUsageUpdate) ||
+          maybeFetch(&forceWeather, &lastWeather, WEATHER_INTERVAL, weatherUpdateAll) ||
+          maybeFetch(&forceGdoc, &lastGdoc, gdocIntervalMin() * 60UL * 1000UL, gdocUpdate);
+      if (refreshInFlight && !forceWeather && !forceClaude && !forceCodex && !forceGdoc)
+        refreshInFlight = false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(FETCH_TICK_MS));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
   logInfo("hd-esp32-s3 firmware %s", FW_VERSION);
+
+  netsyncBegin();  // locks must exist before anything can draw or fetch
 
   lcd.begin(0, U8G2_R1);
   u8g2 = lcd.getU8g2();
@@ -603,11 +664,20 @@ void setup() {
 
   playChimeLong();  // boot updates done
   wifiWasConnected = wifiConnected();  // seed the edge detector; boot already refreshed
+
+  // Boot fetched everything synchronously above (the screen should be complete
+  // before we reach loop()); from here on the feeds run in the background.
+  xTaskCreate(fetchTask, "fetch", FETCH_STACK, nullptr, 1, nullptr);
 }
 
 // Re-read everything persisted on the SD card (call after a card is (re)mounted).
 // configBegin() must run first since the other loaders read from the config store.
 void reloadFromSd() {
+  // Re-seeding the modules rewrites state the fetch task reads -- city names,
+  // the doc URL, the API credentials. Taking the network lock the interactive
+  // way waits out any fetch in flight and keeps the task out until we are done,
+  // since it only touches that state while holding this lock.
+  NetGuard net(0);
   configBegin();
   claudeUsageLoad();
   codexUsageLoad();
@@ -638,20 +708,6 @@ void sdHotplugCheck() {
   }
 }
 
-// Force-refresh every network feed (weather, Claude/Codex usage, Google Doc), reset the
-// periodic timers so the next auto-refresh is a full interval away, and redraw.
-// Shared by the KEY button and the on-(re)connect trigger in loop().
-void refreshAll() {
-  weatherUpdateAll();
-  claudeUsageUpdate();
-  codexUsageUpdate();
-  gdocUpdate();
-  lastWeather = millis();
-  lastClaudeUsage = millis();
-  lastCodexUsage = millis();
-  lastGdoc = millis();
-  drawScreen();  // show the freshly fetched data
-}
 
 void loop() {
   wifiEnsureConnected();
@@ -665,8 +721,7 @@ void loop() {
   bool wifiNow = wifiConnected();
   if (wifiNow && !wifiWasConnected) {
     logInfo("WiFi connected -> auto refresh");
-    refreshAll();
-    playChimeLong();  // updates done
+    requestRefreshAll();
   }
   wifiWasConnected = wifiNow;
 
@@ -676,9 +731,8 @@ void loop() {
     keyLastChange = millis();
     if (k == LOW) {
       logInfo("KEY pressed -> chime + refresh");
-      playChimeShort();  // immediate press feedback
-      refreshAll();
-      playChimeLong();   // updates done
+      playChimeShort();    // immediate press feedback
+      requestRefreshAll();  // the fetch task picks this up; loop() keeps running
     }
     keyPrev = k;
   }
@@ -703,26 +757,18 @@ void loop() {
   }
 
   unsigned long now = millis();
-  if (now - lastWeather >= WEATHER_INTERVAL) {
-    lastWeather = now;
-    weatherUpdateAll();
-  }
 
-  if (now - lastClaudeUsage >= claudeUsageIntervalMin() * 60UL * 1000UL) {
-    lastClaudeUsage = now;
-    claudeUsageUpdate();
+  // The fetch task owns the feed schedule now; loop() only reacts to it. Repaint
+  // as soon as anything is committed -- that is what makes the screen fill in
+  // feed by feed instead of all at once at the end of a refresh.
+  static uint32_t drawnVersion = 0;
+  static bool wasRefreshing = false;
+  if (dataVersion() != drawnVersion) {
+    drawnVersion = dataVersion();
+    drawScreen();
   }
-
-  if (now - lastCodexUsage >= codexUsageIntervalMin() * 60UL * 1000UL) {
-    lastCodexUsage = now;
-    codexUsageUpdate();
-  }
-
-  if (now - lastGdoc >= gdocIntervalMin() * 60UL * 1000UL) {
-    lastGdoc = now;
-    gdocUpdate();
-    drawScreen();  // a fetch may have raised the doc-update popup; show it at once
-  }
+  if (wasRefreshing && !refreshInFlight) playChimeLong();  // a full refresh just finished
+  wasRefreshing = refreshInFlight;
 
   if (now - lastSample >= SAMPLE_INTERVAL) {
     lastSample = now;

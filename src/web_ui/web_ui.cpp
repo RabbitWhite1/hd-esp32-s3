@@ -15,6 +15,7 @@
 #include "../version/version.h"      // FW_VERSION — shown next to the picker
 #include "../gdoc/gdoc.h"                  // configure the Google Doc URL from the form
 #include "../time_sync/time_sync.h"        // select primary/secondary time zones from the form
+#include "../netsync/netsync.h"           // serialise TLS against the background fetch task
 #include "../logging/logging.h"
 #include "favicon.h"                       // embedded 32x32 ICO favicon
 #include <WebServer.h>
@@ -215,7 +216,15 @@ static void handleRoot() {
   // Firmware picker, right-aligned on the title row: running version, the
   // releases CI published, and Install. Each page load re-lists if the cache has
   // gone stale, so the dropdown tracks GitHub on its own; the arrow forces it.
-  ghRefreshIfStale(300);
+  // These are the only TLS calls left on the loop task, so they take the network
+  // lock the interactive way -- waiting for the radio rather than giving up --
+  // and the background fetch task yields to them. Without this, a page load and
+  // a periodic feed could hold two WiFiClientSecure contexts at once, which is
+  // what starved the heap in 5da1af8.
+  {
+    NetGuard net(0);
+    ghRefreshIfStale(300);
+  }
   html += "<form method='post' action='/firmware' class='d-flex align-items-center gap-2'>"
           "<span class='text-muted small text-nowrap'>fw <code>";
   html += FW_VERSION;
@@ -966,6 +975,7 @@ static void handleClaude() {
 static void handleFirmware() {
   String action = server.hasArg("action") ? server.arg("action") : "";
   if (action == "refresh") {
+    NetGuard net(0);  // wait for the radio; the fetch task backs off for us
     bool ok = ghRefresh();
     respond(ok, ok ? ("Found " + String(ghCount()) + " release(s)")
                    : ("Could not list releases: " + String(ghError())));
@@ -976,7 +986,8 @@ static void handleFirmware() {
     respond(false, "Pick a release first");
     return;
   }
-  ghInstall(tag);  // reboots on success
+  NetGuard net(0);  // hold the radio for the whole download: one TLS context at a time
+  ghInstall(tag);   // reboots on success
   respond(false, "Install failed: " + String(ghError()));
 }
 
