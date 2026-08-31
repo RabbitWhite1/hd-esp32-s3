@@ -5,6 +5,7 @@
 #include "ota.h"
 #include "../wifi_net/wifi_net.h"
 #include "../config/config.h"
+#include "../sdcard/sdcard.h"  // the release list is cached on the card across reboots
 #include "../logging/logging.h"
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
@@ -33,6 +34,83 @@ static int relCount = 0;
 static time_t listedAt = 0;
 static unsigned long listedMs = 0;  // millis(), so staleness works before NTP lands
 static String lastError = "";
+
+// The list is mirrored to the card so a reboot -- or a boot with no network --
+// still renders a usable firmware picker instead of an empty dropdown, and so a
+// page load does not have to spend a GitHub API call (capped at 60/hour
+// unauthenticated) just to redraw what we already knew.
+//
+// Line 1 is "<repo>\t<listedAt>"; every later line is "tag\tbinId\tshaId\tbinSize".
+// The repo is recorded because a cache listed from a different repo must not be
+// shown for this one -- gh_repo is editable in the config.
+static const char *CACHE_FILE = "releases.tsv";
+
+static String repoName();  // defined below; the cache is keyed by it
+
+static void saveCache() {
+  String out = repoName() + "\t" + String((long)listedAt) + "\n";
+  for (int i = 0; i < relCount; i++) {
+    out += rels[i].tag;
+    out += '\t';
+    out += String(rels[i].binId);
+    out += '\t';
+    out += String(rels[i].shaId);
+    out += '\t';
+    out += String(rels[i].binSize);
+    out += '\n';
+  }
+  if (!sdWriteText(CACHE_FILE, out)) logWarn("Release cache: write failed (SD card?)");
+}
+
+// Split off the next tab-delimited field, advancing `from`. Returns false at the
+// end of the line, so a short/corrupt row is dropped rather than half-parsed.
+static bool nextField(const String &s, int lineEnd, int &from, String &out) {
+  if (from < 0 || from >= lineEnd) return false;
+  int tab = s.indexOf('\t', from);
+  int end = (tab < 0 || tab > lineEnd) ? lineEnd : tab;
+  out = s.substring(from, end);
+  from = (end == lineEnd) ? lineEnd : end + 1;
+  return out.length() > 0;
+}
+
+void ghLoadCache() {
+  if (relCount > 0) return;  // a live listing always wins over the card
+  String data = sdReadText(CACHE_FILE);
+  if (data.length() == 0) return;
+
+  int nl = data.indexOf('\n');
+  if (nl < 0) return;
+  int p = 0;
+  String repo, when;
+  if (!nextField(data, nl, p, repo) || !nextField(data, nl, p, when)) return;
+  if (repo != repoName()) {
+    logInfo("Release cache is for %s, not %s -- ignoring", repo.c_str(), repoName().c_str());
+    return;
+  }
+  listedAt = (time_t)when.toInt();
+
+  int start = nl + 1;
+  while (start < (int)data.length() && relCount < MAX_RELEASES) {
+    int end = data.indexOf('\n', start);
+    if (end < 0) end = data.length();
+    int f = start;
+    String tag, bin, sha, size;
+    if (nextField(data, end, f, tag) && nextField(data, end, f, bin) &&
+        nextField(data, end, f, sha) && nextField(data, end, f, size)) {
+      Release r;
+      r.tag = tag;
+      r.binId = (uint32_t)bin.toInt();
+      r.shaId = (uint32_t)sha.toInt();
+      r.binSize = (uint32_t)size.toInt();
+      if (r.binId) rels[relCount++] = r;
+    }
+    start = end + 1;
+  }
+  // listedMs is deliberately left at 0: millis() restarted at this boot, so the
+  // cache counts as stale and the first page load re-lists. The point of the
+  // cache is having something to draw meanwhile, not skipping the refresh.
+  if (relCount) logInfo("Release cache: %d release(s) restored from SD", relCount);
+}
 
 static String repoName() {
   String r = configGet(GH_REPO_KEY);
@@ -153,6 +231,7 @@ bool ghRefresh() {
   }
   lastError = "";
   logInfo("Listed %d installable release(s) from %s", relCount, repoName().c_str());
+  saveCache();  // survive a reboot, and a boot with no network
   return true;
 }
 

@@ -16,6 +16,14 @@
 
 bool ghRefresh();                  // re-list releases over HTTPS (blocking); false on failure
 
+// Restore the last listing from /sdcard/releases.tsv (call after sdBegin). The
+// picker then renders on a reboot, or with no network at all, instead of showing
+// an empty dropdown -- and a page load does not have to spend one of the 60/hour
+// unauthenticated GitHub API calls just to redraw what we already knew. A
+// successful ghRefresh() rewrites the file. The cache records which repo it came
+// from and is ignored if "gh_repo" has since changed.
+void ghLoadCache();
+
 // Re-list only if the cache is empty or older than maxAgeSec. Page loads call
 // this so the picker tracks GitHub without a manual refresh, while the TTL keeps
 // the panel snappy -- every form submit re-renders the page, and unauthenticated

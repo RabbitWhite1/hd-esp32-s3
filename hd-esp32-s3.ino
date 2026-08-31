@@ -23,6 +23,7 @@
 #include "src/config/config.h"               // configBegin — shared persistent settings store (esp32.json)
 #include "src/asset_cache/asset_cache.h"     // assetsEnsureFresh — cache Bootstrap on SD for offline web UI
 #include "src/history/history.h"             // historyAdd/historyAddBattery — per-year CSV logging
+#include "src/ota/github_update.h"            // ghLoadCache — restore the release list from SD at boot
 #include "src/netsync/netsync.h"             // locks + version counter shared with the fetch task
 
 // ---------- RLCD SPI pins ----------
@@ -605,6 +606,7 @@ void setup() {
   sdBegin();
   configBegin();   // load small persistent settings (esp32.json) before features read them
   historyBegin();  // ensure /sdcard/sensor_data exists for the temp/humidity logs
+  ghLoadCache();   // firmware picker renders from the card until the first live listing
 
   // ============================ ONE-TIME SD FORMAT ============================
   // Wipes the card to a fresh FAT filesystem on EVERY boot — here only to prepare
@@ -682,6 +684,7 @@ void reloadFromSd() {
   weatherLoadCities();
   webReloadTodo();
   historyBegin();  // recreate sensor_data/ on the (possibly new/blank) card
+  ghLoadCache();   // a new card may carry a different (or no) release cache
   drawScreen();
 }
 
