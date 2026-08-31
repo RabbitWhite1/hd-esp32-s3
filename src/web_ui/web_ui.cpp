@@ -946,6 +946,13 @@ static void handleWifiSave() {
 }
 
 static void handleClaude() {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   // A pasted full cookie takes priority over the individual org/key fields.
   String cookie = server.hasArg("cookie") ? server.arg("cookie") : String("");
   cookie.trim();
@@ -992,6 +999,13 @@ static void handleFirmware() {
 }
 
 static void handleGdoc() {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   if (!server.hasArg("url")) {
     respond(false, "No URL provided");
     return;
@@ -1047,6 +1061,13 @@ static void handleFavicon() {
 }
 
 static void handleWeatherAdd() {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   String q = server.hasArg("city") ? server.arg("city") : "";
   String resolved;
   bool ok = weatherAddCity(q, resolved);  // geocodes, appends, persists on success
@@ -1058,6 +1079,13 @@ static void handleWeatherAdd() {
 // only -> user clicks Save order). A change to the top set re-fetches the shown
 // cities so the LCD reflects it.
 static void handleWeatherEdit() {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
   String act = server.hasArg("act") ? server.arg("act") : "";
   bool ok = true;
@@ -1078,6 +1106,13 @@ static void handleWeatherEdit() {
 // "Save order" for weather cities (mirrors handleWifiSave): apply the drag order
 // if sent, persist, then re-fetch the (possibly new) top cities.
 static void handleWeatherOrder() {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   String csv = server.hasArg("order") ? server.arg("order") : "";
   csv.trim();
   bool ok = true;
@@ -1110,6 +1145,13 @@ static void handleWeatherOrder() {
 // JSON / redirect. An unchanged token is accepted without touching the SD card,
 // so an hourly relay doesn't rewrite esp32.json 24 times a day.
 static void applyCodexToken(bool machine) {
+  // Settings the fetch task reads while it works: reassigning a String it is
+  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
+  // the fetch. Taking the network lock the interactive way waits out any fetch
+  // in flight and keeps the task out for the duration -- it only touches this
+  // state while holding the same lock. Some of these handlers also do their own
+  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
+  NetGuard net(0);
   String tok = server.hasArg("token") ? server.arg("token") : String("");
   tok.trim();
   bool ok = true;

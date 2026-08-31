@@ -39,7 +39,10 @@ void dataLock();
 void dataUnlock();
 
 // Bumped once per committed fetch so loop() knows there is something new to
-// draw. Single writer (the fetch task), so a plain increment is enough.
+// draw. Single writer (the fetch task), so the non-atomic increment cannot lose
+// an update; readers do one aligned 32-bit load, which is atomic here. Compare
+// versions with != and never with <, so the (theoretical -- ~44,000 years at the
+// real bump rate) unsigned wrap stays a no-op instead of wedging the repaint.
 uint32_t dataVersion();
 void dataBump();
 

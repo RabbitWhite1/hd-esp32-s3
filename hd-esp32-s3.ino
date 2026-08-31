@@ -763,8 +763,12 @@ void loop() {
   // feed by feed instead of all at once at the end of a refresh.
   static uint32_t drawnVersion = 0;
   static bool wasRefreshing = false;
-  if (dataVersion() != drawnVersion) {
-    drawnVersion = dataVersion();
+  // Read the counter once: the fetch task can bump it between two reads, which
+  // would leave drawnVersion ahead of what we actually drew. Comparing with !=
+  // (never <) is what keeps this correct across the eventual unsigned wrap.
+  uint32_t v = dataVersion();
+  if (v != drawnVersion) {
+    drawnVersion = v;
     drawScreen();
   }
   if (wasRefreshing && !refreshInFlight) playChimeLong();  // a full refresh just finished
