@@ -87,6 +87,75 @@ window and no secondary one, so only one gauge is drawn.
 See `CLAUDE.md` for architecture, the module/BSP layout, the pin map, and the list of persisted
 SD-card files.
 
+## How it runs
+
+Network feeds are fetched on their own FreeRTOS task so a refresh never parks the UI. The two tasks
+share no mutable data: the fetch task writes a private staging slot per feed, and the loop task
+promotes it. Every value the renderer reads is therefore written by the thread that reads it, which
+is why there is no lock around the display or the cached feed values.
+
+```mermaid
+flowchart TB
+    subgraph FETCH["fetch task — owns the network"]
+        direction TB
+        TICK["wake every 200 ms"]
+        LOCK{"netTryLock 50 ms"}
+        DOFETCH["xFetch() — one feed per wake"]
+        TICK --> LOCK
+        LOCK -- "busy: web UI has the radio" --> TICK
+        LOCK -- "acquired" --> DOFETCH
+    end
+
+    STAGE["staging slot per feed<br/>claude · codex · weather · gdoc"]
+
+    subgraph LOOP["loop task — owns the data and the display"]
+        direction TB
+        IO["buttons · web · OTA · sensors<br/>stay responsive throughout"]
+        COMMIT["xCommit() on all four feeds"]
+        DRAW["drawScreen()"]
+        LCD["ST7305 LCD"]
+        COMMIT -- "anything promoted" --> DRAW
+        DRAW --> LCD
+    end
+
+    DOFETCH -- "writes slot, sets pending" --> STAGE
+    STAGE -- "promotes to live, clears pending" --> COMMIT
+    IO -- "KEY press / Wi-Fi up: set force flags" --> TICK
+```
+
+The only thing the two tasks still share is the **network lock**, which serialises TLS: two
+`WiFiClientSecure` contexts alive at once exhaust the heap. The web UI opens its own connections on
+the loop task (listing GitHub releases), so the lock is taken asymmetrically — background
+polling tries for 50 ms and retries on its next wake, while anything you triggered waits for the
+radio. Interactive work never queues behind a background refresh. The same lock guards the settings
+the fetch task reads (the doc URL, credentials, city coordinates) against the web handlers that
+write them.
+
+A KEY press is a request, not a blocking call. The screen fills in one feed at a time as results
+land, rather than all at once when the last fetch returns:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant KEY as KEY button
+    participant MAIN as loop task
+    participant FETCH as fetch task
+    participant LCD as LCD
+    KEY->>MAIN: press
+    MAIN->>MAIN: playChimeShort, set force flags
+    loop one feed per 200 ms wake
+        FETCH->>FETCH: netTryLock, then xFetch
+        FETCH--)MAIN: staged, pending = true
+        MAIN->>LCD: xCommit, then drawScreen
+    end
+    FETCH->>MAIN: all force flags clear
+    MAIN->>MAIN: playChimeLong
+```
+
+Pressing KEY again mid-refresh **coalesces** rather than queueing: the force flags are booleans, so a
+second press re-arms all four feeds and extends the round in progress. Ten presses cost one long
+round, not ten rounds — though each press does re-fetch feeds that already completed.
+
 ## Continuous integration
 
 `.github/workflows/firmware.yml` builds the image on every push to `main` and on pull requests, pinned to the
