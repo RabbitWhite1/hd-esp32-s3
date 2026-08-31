@@ -8,7 +8,13 @@
 // Claude usage backend: fetches the organization usage summary from claude.ai
 // over HTTPS and caches the two headline utilization figures. The org id and
 // session cookie are set at runtime (e.g. from the web UI), not hardcoded.
-void claudeUsageUpdate();   // fetch + parse; updates the cached values (call when Wi-Fi is up)
+// Split so the network half can run on the background fetch task while the
+// values the renderer reads are only ever written by the loop task:
+// claudeUsageFetch() stages a result, claudeUsageCommit() promotes it. Neither
+// needs a lock -- see the staging note in claude_usage.cpp.
+void claudeUsageFetch();    // fetch + parse into a staging slot (call when Wi-Fi is up)
+bool claudeUsageCommit();   // loop task: promote a staged result; true if it did
+void claudeUsageUpdate();   // Fetch + Commit, for callers already on the loop task
 bool claudeUsageOk();       // true if the most recent fetch succeeded
 float claudeFiveHour();     // 5-hour-window utilization, percent (NAN if unknown)
 float claudeSevenDay();     // 7-day-window utilization, percent (NAN if unknown)

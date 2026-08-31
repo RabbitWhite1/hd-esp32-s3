@@ -23,7 +23,13 @@ int weatherMaxCities();        // capacity (how many cities may be configured)
 int weatherShownMax();         // how many top cities the LCD shows + we fetch (2)
 const char *weatherCityName(int i);  // full "City, Region, Country" label of city i ("" if out of range)
 
-void weatherUpdateAll();  // refresh the top weatherShownMax() cities (a city keeps its old fields on failure)
+// Split so the network half runs on the background fetch task while cities[] is
+// only ever written by the loop task (see claude_usage.h). Staged forecasts
+// record the city name they were fetched for, so a list edit in between drops
+// the result instead of mislabelling it.
+void weatherFetch();      // fetch the top weatherShownMax() cities into staging
+bool weatherCommit();     // loop task: promote staged forecasts; true if it did
+void weatherUpdateAll();  // Fetch + Commit, for callers already on the loop task
 
 // City configuration (geocode a name -> coordinates, persisted in config).
 void weatherLoadCities();   // restore from config, or seed defaults (call after configBegin)

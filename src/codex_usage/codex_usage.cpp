@@ -45,13 +45,25 @@ static const char *USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 static String accessToken = "";
 static time_t tokenExp = 0;  // "exp" claim of the token above (0 = unknown)
 
-static bool ok = false;
-static float primaryPct = NAN;
-static float secondaryPct = NAN;
-static int primaryWinMin = 0;
-static int secondaryWinMin = 0;
-static String planType = "";
-static time_t asOf = 0;  // wall-clock time of the last successful fetch
+// Staged handoff between the fetch task and the loop task -- see the note in
+// claude_usage.cpp. planType is a String, so it matters that only the loop task
+// ever writes the copy the renderer reads: promoting by value in Commit() means
+// codexPlanType()'s c_str() can never point at a buffer the fetch just freed.
+struct Usage {
+  bool ok;
+  float primaryPct, secondaryPct;
+  int primaryWinMin, secondaryWinMin;
+  String planType;
+  time_t asOf;  // wall-clock time of the last successful fetch
+};
+static Usage live = {false, NAN, NAN, 0, 0, "", 0};
+static Usage staged = {false, NAN, NAN, 0, 0, "", 0};
+static volatile bool pending = false;
+
+// A failed fetch stages "not ok" while keeping the last good numbers, so the UI
+// shows a stale reading rather than blanking out.
+static void stageFailure();
+static const char *windowLabel(int minutes, int slot);  // defined below, used when logging a fetch
 
 // Decode one base64url segment (RFC 4648 §5, unpadded) as used by JWTs. Returns
 // "" if the input holds a character outside the alphabet.
@@ -107,13 +119,13 @@ static void readWindow(JsonVariantConst win, float *pct, int *winMin) {
   if (secs > 0) *winMin = (int)(secs / 60);
 }
 
-void codexUsageUpdate() {
+void codexUsageFetch() {
   if (!wifiConnected()) return;
   if (accessToken.length() == 0) return;  // no token relayed yet -> nothing to fetch
   if (codexTokenExpired()) {
     logWarn("Codex usage: access token expired -- re-run the relay "
             "(README section \"Codex usage relay\")");
-    ok = false;
+    stageFailure();
     return;
   }
   WiFiClientSecure client;
@@ -133,7 +145,7 @@ void codexUsageUpdate() {
   if (code != 200) {
     logError("Codex usage HTTP %d", code);
     http.end();
-    ok = false;
+    stageFailure();
     return;
   }
   String payload = http.getString();
@@ -142,43 +154,68 @@ void codexUsageUpdate() {
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     logError("Codex usage JSON parse failed");
-    ok = false;
+    stageFailure();
     return;
   }
   JsonVariantConst rl = doc["rate_limit"];
-  readWindow(rl["primary_window"], &primaryPct, &primaryWinMin);
-  readWindow(rl["secondary_window"], &secondaryPct, &secondaryWinMin);
-  planType = doc["plan_type"] | "";
-  ok = !isnan(primaryPct) || !isnan(secondaryPct);
-  if (ok) {
-    asOf = time(nullptr);
-    logInfo("Codex usage (%s): %s %.0f%%  %s %.0f%%", planType.c_str(), codexPrimaryLabel(),
-            primaryPct, codexSecondaryLabel(), secondaryPct);
-  } else {
+  Usage u;
+  readWindow(rl["primary_window"], &u.primaryPct, &u.primaryWinMin);
+  readWindow(rl["secondary_window"], &u.secondaryPct, &u.secondaryWinMin);
+  u.planType = doc["plan_type"] | "";
+  u.ok = !isnan(u.primaryPct) || !isnan(u.secondaryPct);
+  u.asOf = u.ok ? time(nullptr) : live.asOf;  // keep the old timestamp on a bad payload
+  if (u.ok)
+    logInfo("Codex usage (%s): %s %.0f%%  %s %.0f%%", u.planType.c_str(),
+            windowLabel(u.primaryWinMin, 0), u.primaryPct, windowLabel(u.secondaryWinMin, 1),
+            u.secondaryPct);
+  else
     logWarn("Codex usage: no rate-limit windows in the response");
-  }
+  staged = u;
+  pending = true;
+}
+
+static void stageFailure() {
+  staged = live;
+  staged.ok = false;
+  pending = true;
+}
+
+// Promote a staged result if one is waiting. Runs on the loop task, the only
+// reader of `live`, so nothing here races the fetch.
+bool codexUsageCommit() {
+  if (!pending) return false;
+  live = staged;
+  pending = false;
+  return true;
+}
+
+// Convenience for the synchronous boot path and the web handlers, which run on
+// the loop task and want the result straight away.
+void codexUsageUpdate() {
+  codexUsageFetch();
+  codexUsageCommit();
 }
 
 bool codexUsageOk() {
-  return ok;
+  return live.ok;
 }
 float codexPrimaryPercent() {
-  return primaryPct;
+  return live.primaryPct;
 }
 float codexSecondaryPercent() {
-  return secondaryPct;
+  return live.secondaryPct;
 }
 int codexPrimaryWindowMin() {
-  return primaryWinMin;
+  return live.primaryWinMin;
 }
 int codexSecondaryWindowMin() {
-  return secondaryWinMin;
+  return live.secondaryWinMin;
 }
 time_t codexUsageAsOf() {
-  return asOf;
+  return live.asOf;
 }
 const char *codexPlanType() {
-  return planType.c_str();
+  return live.planType.c_str();
 }
 
 // Compact window label for the LCD gauge: minutes below an hour, then hours, then
@@ -195,10 +232,10 @@ static const char *windowLabel(int minutes, int slot) {
 }
 
 const char *codexPrimaryLabel() {
-  return windowLabel(primaryWinMin, 0);
+  return windowLabel(live.primaryWinMin, 0);
 }
 const char *codexSecondaryLabel() {
-  return windowLabel(secondaryWinMin, 1);
+  return windowLabel(live.secondaryWinMin, 1);
 }
 
 // The token lives on the SD card in plaintext - acceptable here (as with the

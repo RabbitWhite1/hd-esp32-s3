@@ -5,7 +5,6 @@
 #include "../wifi_net/wifi_net.h"
 #include "../config/config.h"  // URL + refresh interval persisted in esp32.json
 #include "../logging/logging.h"
-#include "../netsync/netsync.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
@@ -30,6 +29,19 @@ static time_t asOf = 0;  // wall-clock time of the last successful fetch
 // it. prevValid stays false until the first successful fetch has been snapshotted,
 // so a fresh boot doesn't report the whole document as "new".
 static String prevLines[MAX_DOC_LINES];
+
+// Staged handoff between the fetch task and the loop task -- see the note in
+// claude_usage.cpp. gdoc is the module that makes this necessary rather than
+// merely tidy: gdocLine() returns a String's interior pointer, so the fetch must
+// never rewrite lines[] while the renderer holds one.
+static String stagedLines[MAX_DOC_LINES];
+static int stagedCount = 0;
+static String stagedTitle;
+static bool stagedHaveTitle = false;
+static bool stagedOk = false;
+static bool stagedLinesValid = false;  // false after a failed fetch: keep the old text
+static time_t stagedAsOf = 0;
+static volatile bool pending = false;
 static int prevCount = 0;
 static bool prevValid = false;
 
@@ -171,16 +183,16 @@ bool gdocDiffTruncated() {
   return diffTrunc;
 }
 void gdocDiffClear() {
-  DataGuard g;  // BOOT press on the loop task vs. diffAgainstPrev() on the fetch task
+  // No lock: diffLines[] is written only by gdocCommit() and cleared here, both
+  // on the loop task.
   for (int i = 0; i < diffCount; i++) diffLines[i] = "";
   diffCount = 0;
   diffTrunc = false;
 }
 
-void gdocUpdate() {
+void gdocFetch() {
   if (!wifiConnected() || docUrl.length() == 0) return;
-  String newTitle;        // committed with the lines below, not written in place
-  bool haveTitle = false;
+  stagedHaveTitle = false;
   WiFiClientSecure client;
   client.setInsecure();  // skip cert validation (same approach as the weather fetch)
 
@@ -198,7 +210,9 @@ void gdocUpdate() {
   if (code != 200) {
     logError("Doc fetch HTTP %d", code);
     http.end();
-    ok = false;
+    stagedOk = false;
+    stagedLinesValid = false;  // keep whatever text is already on screen
+    pending = true;
     return;
   }
   // The title rides along as the download filename, e.g.
@@ -211,8 +225,8 @@ void gdocUpdate() {
     if (e > s) {
       String t = cd.substring(s, e);
       if (t.endsWith(".txt")) t = t.substring(0, t.length() - 4);
-      newTitle = sanitize(t);
-      haveTitle = true;
+      stagedTitle = sanitize(t);
+      stagedHaveTitle = true;
     }
   }
   String payload = http.getString();
@@ -226,37 +240,51 @@ void gdocUpdate() {
   // Split on newlines, keeping blank lines (they separate paragraphs) but
   // collapsing a run of consecutive blanks into a single blank — the Google txt
   // export emits two blank lines per paragraph gap. Trailing blanks are dropped.
-  // Parse into scratch rather than straight into lines[]. drawScreen() may be
-  // rendering the doc view on the loop task right now, and gdocLine() hands it
-  // String::c_str() pointers into lines[] -- rewriting in place would free a
-  // buffer out from under the renderer. MAX_DOC_LINES is 12, so the copy is free.
-  String scratch[MAX_DOC_LINES];
-  int scratchCount = 0;
+  // Parse into the staging slot, never straight into lines[]: the loop task may
+  // be rendering the doc view right now, and gdocLine() hands it c_str() pointers
+  // into lines[]. Only gdocCommit(), on that same task, touches the live text.
+  stagedCount = 0;
   int start = 0;
-  while (start <= (int)payload.length() && scratchCount < MAX_DOC_LINES) {
+  while (start <= (int)payload.length() && stagedCount < MAX_DOC_LINES) {
     int nl = payload.indexOf('\n', start);
     String s = sanitize(nl < 0 ? payload.substring(start) : payload.substring(start, nl));
-    bool prevBlank = (scratchCount > 0 && scratch[scratchCount - 1].length() == 0);
-    if (s.length() > 0 || !prevBlank) scratch[scratchCount++] = s;  // skip a 2nd+ consecutive blank
+    bool prevBlank = (stagedCount > 0 && stagedLines[stagedCount - 1].length() == 0);
+    if (s.length() > 0 || !prevBlank) stagedLines[stagedCount++] = s;  // skip a 2nd+ consecutive blank
     if (nl < 0) break;
     start = nl + 1;
   }
-  while (scratchCount > 0 && scratch[scratchCount - 1].length() == 0) scratchCount--;  // drop trailing blanks
+  while (stagedCount > 0 && stagedLines[stagedCount - 1].length() == 0) stagedCount--;  // drop trailing blanks
 
-  // Commit: swap the parsed revision in and diff it, with the renderer locked
-  // out. Everything here is in-memory and bounded, so the display stalls for
-  // microseconds rather than for the length of the fetch above.
-  {
-    DataGuard g;
-    for (int i = 0; i < scratchCount; i++) lines[i] = scratch[i];
-    for (int i = scratchCount; i < lineCount; i++) lines[i] = "";  // release dropped lines
-    lineCount = scratchCount;
-    if (haveTitle) title = newTitle;
+  stagedAsOf = time(nullptr);
+  stagedOk = true;
+  stagedLinesValid = true;
+  pending = true;
+  logInfo("Doc fetched: %d lines", stagedCount);
+}
+
+// Promote the staged revision and diff it against the previous one. Runs on the
+// loop task, the only reader of lines[]/diffLines[], so the swap needs no lock
+// and the renderer never sees a half-replaced document.
+bool gdocCommit() {
+  if (!pending) return false;
+  if (stagedLinesValid) {
+    for (int i = 0; i < stagedCount; i++) lines[i] = stagedLines[i];
+    for (int i = stagedCount; i < lineCount; i++) lines[i] = "";  // release dropped lines
+    lineCount = stagedCount;
+    if (stagedHaveTitle) title = stagedTitle;
     diffAgainstPrev();  // collect what changed vs. the last revision (drives the popup)
-    ok = true;
-    asOf = time(nullptr);
+    asOf = stagedAsOf;
   }
-  logInfo("Doc fetched: %d lines", lineCount);
+  ok = stagedOk;
+  pending = false;
+  return true;
+}
+
+// Convenience for the synchronous boot path and the web handlers, which run on
+// the loop task and want the result straight away.
+void gdocUpdate() {
+  gdocFetch();
+  gdocCommit();
 }
 
 bool gdocOk() {

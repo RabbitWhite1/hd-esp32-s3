@@ -477,10 +477,6 @@ void drawSdcardIcon(int x, int y, bool present) {
 }
 
 void drawScreen() {
-  // The fetch task rewrites the cached feeds while we read them, and getters
-  // like gdocLine() hand back interior pointers, so the whole compose+flush runs
-  // under the data lock. A commit is microseconds, so the task barely waits.
-  DataGuard dg;
   u8g2->clearBuffer();
   u8g2->setDrawColor(1);
   char buf[80];
@@ -560,10 +556,9 @@ static bool maybeFetch(volatile bool *force, unsigned long *stamp, unsigned long
   if (!*force && millis() - *stamp < intervalMs) return false;
   NetGuard net(NET_TRY_MS);
   if (!net.ok) return false;  // the web UI is mid-TLS; try again next tick
-  fn();
+  fn();  // stages a result; loop() promotes it in the drain below
   *stamp = millis();
   *force = false;
-  dataBump();  // tell loop() there is new state worth drawing
   return true;
 }
 
@@ -574,10 +569,10 @@ static void fetchTask(void *) {
     // of queueing behind a whole refresh round. `||` short-circuits after the
     // first one that runs.
     if (wifiConnected()) {
-      maybeFetch(&forceClaude, &lastClaudeUsage, claudeUsageIntervalMin() * 60UL * 1000UL, claudeUsageUpdate) ||
-          maybeFetch(&forceCodex, &lastCodexUsage, codexUsageIntervalMin() * 60UL * 1000UL, codexUsageUpdate) ||
-          maybeFetch(&forceWeather, &lastWeather, WEATHER_INTERVAL, weatherUpdateAll) ||
-          maybeFetch(&forceGdoc, &lastGdoc, gdocIntervalMin() * 60UL * 1000UL, gdocUpdate);
+      maybeFetch(&forceClaude, &lastClaudeUsage, claudeUsageIntervalMin() * 60UL * 1000UL, claudeUsageFetch) ||
+          maybeFetch(&forceCodex, &lastCodexUsage, codexUsageIntervalMin() * 60UL * 1000UL, codexUsageFetch) ||
+          maybeFetch(&forceWeather, &lastWeather, WEATHER_INTERVAL, weatherFetch) ||
+          maybeFetch(&forceGdoc, &lastGdoc, gdocIntervalMin() * 60UL * 1000UL, gdocFetch);
       if (refreshInFlight && !forceWeather && !forceClaude && !forceCodex && !forceGdoc)
         refreshInFlight = false;
     }
@@ -758,19 +753,19 @@ void loop() {
 
   unsigned long now = millis();
 
-  // The fetch task owns the feed schedule now; loop() only reacts to it. Repaint
-  // as soon as anything is committed -- that is what makes the screen fill in
-  // feed by feed instead of all at once at the end of a refresh.
-  static uint32_t drawnVersion = 0;
+  // Drain: the fetch task stages results, this is where they become visible.
+  // Promoting on the loop task means every value drawScreen() reads was also
+  // written here, so the two threads share no mutable state and neither needs a
+  // lock. Repainting per committed feed is what makes the screen fill in one
+  // feed at a time rather than all at once at the end of a refresh.
   static bool wasRefreshing = false;
-  // Read the counter once: the fetch task can bump it between two reads, which
-  // would leave drawnVersion ahead of what we actually drew. Comparing with !=
-  // (never <) is what keeps this correct across the eventual unsigned wrap.
-  uint32_t v = dataVersion();
-  if (v != drawnVersion) {
-    drawnVersion = v;
-    drawScreen();
-  }
+  bool changed = false;
+  if (claudeUsageCommit()) changed = true;
+  if (codexUsageCommit()) changed = true;
+  if (weatherCommit()) changed = true;
+  if (gdocCommit()) changed = true;
+  if (changed) drawScreen();
+
   if (wasRefreshing && !refreshInFlight) playChimeLong();  // a full refresh just finished
   wasRefreshing = refreshInFlight;
 

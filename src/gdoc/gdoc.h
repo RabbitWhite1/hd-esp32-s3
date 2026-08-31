@@ -10,7 +10,13 @@
 // firmware -- it is set at runtime via the web UI and persisted to SD, so the
 // module simply no-ops until then; the doc must stay shared as "anyone with the
 // link".
-void gdocUpdate();            // fetch + parse; updates the cached lines (call when Wi-Fi is up)
+// Split so the network half runs on the background fetch task while the cached
+// lines are only ever written by the loop task (see claude_usage.h). This module
+// is why the split exists: gdocLine() returns a String's interior pointer, so a
+// fetch rewriting lines[] under the renderer would be a use-after-free.
+void gdocFetch();             // fetch + parse into a staging slot (call when Wi-Fi is up)
+bool gdocCommit();            // loop task: promote the staged revision; true if it did
+void gdocUpdate();            // Fetch + Commit, for callers already on the loop task
 bool gdocOk();                // true if the most recent fetch succeeded
 int gdocLineCount();          // number of cached non-empty lines
 const char *gdocLine(int i);  // i-th cached line ("" if out of range)

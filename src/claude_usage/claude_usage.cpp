@@ -58,12 +58,26 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 static String orgId = "";
 static String sessionKey = "";
 
-static bool ok = false;
-static float fiveHour = NAN;
-static float sevenDay = NAN;
-static time_t asOf = 0;  // wall-clock time of the last successful fetch
+// Fetched values are handed from the fetch task to the loop task by staging,
+// not by sharing: claudeUsageFetch() writes only `staged`, and the loop task
+// promotes it into `live` in claudeUsageCommit(). Getters read `live`, so every
+// value the renderer sees is written by the thread that reads it. `pending` is
+// the whole protocol -- producer sets it, consumer clears it, and the producer
+// never restages while it is set, so neither side needs a lock.
+struct Usage {
+  bool ok;
+  float fiveHour, sevenDay;
+  time_t asOf;  // wall-clock time of the last successful fetch
+};
+static Usage live = {false, NAN, NAN, 0};
+static Usage staged = {false, NAN, NAN, 0};
+static volatile bool pending = false;
 
-void claudeUsageUpdate() {
+// A failed fetch stages "not ok" while keeping the last good numbers, so the UI
+// shows a stale reading rather than blanking out.
+static void stageFailure();
+
+void claudeUsageFetch() {
   if (!wifiConnected()) return;
   if (sessionKey.length() == 0) return;  // not configured yet -> nothing to fetch
   WiFiClientSecure client;
@@ -85,7 +99,7 @@ void claudeUsageUpdate() {
   if (code != 200) {
     logError("Claude usage HTTP %d", code);
     http.end();
-    ok = false;
+    stageFailure();
     return;
   }
   String payload = http.getString();
@@ -94,26 +108,49 @@ void claudeUsageUpdate() {
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     logError("Claude usage JSON parse failed");
-    ok = false;
+    stageFailure();
     return;
   }
-  fiveHour = doc["five_hour"]["utilization"] | NAN;
-  sevenDay = doc["seven_day"]["utilization"] | NAN;
-  ok = !isnan(fiveHour) || !isnan(sevenDay);
-  if (ok) {
-    asOf = time(nullptr);
-    logInfo("Claude usage: 5h %.0f%%  7d %.0f%%", fiveHour, sevenDay);
-  }
+  Usage u;
+  u.fiveHour = doc["five_hour"]["utilization"] | NAN;
+  u.sevenDay = doc["seven_day"]["utilization"] | NAN;
+  u.ok = !isnan(u.fiveHour) || !isnan(u.sevenDay);
+  u.asOf = u.ok ? time(nullptr) : live.asOf;  // keep the old timestamp on a bad payload
+  if (u.ok) logInfo("Claude usage: 5h %.0f%%  7d %.0f%%", u.fiveHour, u.sevenDay);
+  staged = u;
+  pending = true;
+}
+
+static void stageFailure() {
+  staged = live;
+  staged.ok = false;
+  pending = true;
+}
+
+// Promote a staged result if one is waiting. Runs on the loop task, which is the
+// only reader of `live`, so nothing here races the fetch.
+bool claudeUsageCommit() {
+  if (!pending) return false;
+  live = staged;
+  pending = false;
+  return true;
+}
+
+// Convenience for the synchronous boot path and the web handlers, which run on
+// the loop task and want the result straight away.
+void claudeUsageUpdate() {
+  claudeUsageFetch();
+  claudeUsageCommit();
 }
 
 bool claudeUsageOk() {
-  return ok;
+  return live.ok;
 }
 float claudeFiveHour() {
-  return fiveHour;
+  return live.fiveHour;
 }
 float claudeSevenDay() {
-  return sevenDay;
+  return live.sevenDay;
 }
 
 void claudeUsageSetOrgId(const String &id) {
@@ -179,7 +216,7 @@ bool claudeUsageSave() {
   return ok;
 }
 time_t claudeUsageAsOf() {
-  return asOf;
+  return live.asOf;
 }
 const String &claudeUsageOrgId() {
   return orgId;

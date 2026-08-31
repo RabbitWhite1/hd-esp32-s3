@@ -54,7 +54,23 @@ static void initCity(City &c, const char *name, const char *label, float lat, fl
 
 // weatherSaveCities() is declared in weather.h (public, used by the web reorder).
 
-static bool fetchWeather(City &c) {
+// Staged handoff between the fetch task and the loop task -- see the note in
+// claude_usage.cpp. Only the numeric forecast fields are fetched; a city's name
+// and coordinates are written by initCity() on the loop task alone. Each slot
+// records the name it was fetched for, so if the list is edited between the
+// fetch and the commit the stale result is dropped rather than landing on
+// whichever city inherited that index.
+struct Forecast {
+  char forName[32];
+  float cur, hi, lo, wind;
+  int code;
+  bool ok;
+};
+static Forecast staged[SHOWN_CITIES];
+static int stagedCount = 0;
+static volatile bool pending = false;
+
+static bool fetchWeather(const City &c, Forecast &f) {
   if (!wifiConnected()) return false;
   WiFiClientSecure client;
   client.setInsecure();
@@ -77,19 +93,54 @@ static bool fetchWeather(City &c) {
   http.end();
   JsonDocument doc;
   if (deserializeJson(doc, payload)) return false;
-  c.cur = doc["current"]["temperature_2m"] | NAN;
-  c.code = doc["current"]["weather_code"] | -1;
-  c.wind = doc["current"]["wind_speed_10m"] | 0.0f;
-  c.hi = doc["daily"]["temperature_2m_max"][0] | NAN;
-  c.lo = doc["daily"]["temperature_2m_min"][0] | NAN;
-  c.ok = !isnan(c.cur);
-  return c.ok;
+  f.cur = doc["current"]["temperature_2m"] | NAN;
+  f.code = doc["current"]["weather_code"] | -1;
+  f.wind = doc["current"]["wind_speed_10m"] | 0.0f;
+  f.hi = doc["daily"]["temperature_2m_max"][0] | NAN;
+  f.lo = doc["daily"]["temperature_2m_min"][0] | NAN;
+  f.ok = !isnan(f.cur);
+  return f.ok;
 }
 
-void weatherUpdateAll() {
+void weatherFetch() {
   // Only the top SHOWN_CITIES are displayed on the LCD, so only those are fetched.
   int n = cityCount < SHOWN_CITIES ? cityCount : SHOWN_CITIES;
-  for (int i = 0; i < n; i++) fetchWeather(cities[i]);
+  for (int i = 0; i < n; i++) {
+    staged[i].ok = false;
+    strncpy(staged[i].forName, cities[i].name, sizeof(staged[i].forName) - 1);
+    staged[i].forName[sizeof(staged[i].forName) - 1] = '\0';
+    fetchWeather(cities[i], staged[i]);
+  }
+  stagedCount = n;
+  pending = true;
+}
+
+// Promote staged forecasts onto the cities they were actually fetched for. Runs
+// on the loop task, which is also the only writer of the city list.
+bool weatherCommit() {
+  if (!pending) return false;
+  bool changed = false;
+  for (int i = 0; i < stagedCount && i < cityCount; i++) {
+    if (!staged[i].ok) continue;
+    if (strncmp(staged[i].forName, cities[i].name, sizeof(staged[i].forName)) != 0)
+      continue;  // the list moved under us; drop rather than mislabel a reading
+    cities[i].cur = staged[i].cur;
+    cities[i].hi = staged[i].hi;
+    cities[i].lo = staged[i].lo;
+    cities[i].wind = staged[i].wind;
+    cities[i].code = staged[i].code;
+    cities[i].ok = true;
+    changed = true;
+  }
+  pending = false;
+  return changed;
+}
+
+// Convenience for the synchronous boot path and the web handlers, which run on
+// the loop task and want the result straight away.
+void weatherUpdateAll() {
+  weatherFetch();
+  weatherCommit();
 }
 
 // Resolve a free-text place name to a canonical name + coordinates via
@@ -199,7 +250,19 @@ bool weatherAddCity(const String &query, String &resolvedOut) {
     return false;
   }
   if (cityCount - 1 < SHOWN_CITIES)
-    fetchWeather(cities[cityCount - 1]);  // populate right away only if it's a shown row
+    {
+      Forecast f;  // direct populate: this runs on the loop task, no staging needed
+      f.ok = false;
+      if (fetchWeather(cities[cityCount - 1], f)) {
+        City &c = cities[cityCount - 1];
+        c.cur = f.cur;
+        c.hi = f.hi;
+        c.lo = f.lo;
+        c.wind = f.wind;
+        c.code = f.code;
+        c.ok = true;
+      }
+    }
   resolvedOut = label + " (" + String(lat, 2) + ", " + String(lon, 2) + ")";
   logInfo("City added: %s -> %.2f,%.2f", nm.c_str(), lat, lon);
   return true;

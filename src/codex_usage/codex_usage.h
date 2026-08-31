@@ -16,7 +16,11 @@
 // The API reports two rolling windows whose lengths depend on the plan (e.g. a
 // 7-day primary with no secondary on Plus), so windows are exposed as generic
 // primary/secondary pairs with their length, not as fixed "5h"/"7d" fields.
-void codexUsageUpdate();   // fetch + parse; updates the cached values (call when Wi-Fi is up)
+// Split so the network half runs on the background fetch task while the values
+// the renderer reads are only ever written by the loop task (see claude_usage.h).
+void codexUsageFetch();    // fetch + parse into a staging slot (call when Wi-Fi is up)
+bool codexUsageCommit();   // loop task: promote a staged result; true if it did
+void codexUsageUpdate();   // Fetch + Commit, for callers already on the loop task
 bool codexUsageOk();       // true if the most recent fetch succeeded
 float codexPrimaryPercent();     // primary window utilization, percent (NAN if unknown)
 float codexSecondaryPercent();   // secondary window utilization, percent (NAN if unknown)
