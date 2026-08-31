@@ -128,7 +128,7 @@ void playChimeShort() {
   playNotes(notes, 1, 90);
 }
 
-// Longer ascending jingle signalling a refresh (or boot) has finished.
+// Longer ascending jingle signalling boot or a user-requested refresh finished.
 void playChimeLong() {
   const int notes[4] = { 880, 1047, 1319, 1568 };  // A5 - C6 - E6 - G6
   playNotes(notes, 4, 140);
@@ -541,13 +541,16 @@ static const uint32_t FETCH_STACK = 10 * 1024;  // mbedTLS needs room; the loop 
 // Set to force a feed on the next tick, cleared only once it has actually run --
 // so a feed skipped because the web UI held the radio is simply retried.
 static volatile bool forceWeather = false, forceClaude = false, forceCodex = false, forceGdoc = false;
-static volatile bool refreshInFlight = false;  // loop() chimes on the falling edge
+static volatile bool refreshInFlight = false;
+static volatile bool refreshChimePending = false;  // armed only by a KEY-requested refresh
 
 // Ask for every feed to be refreshed now. Returns immediately; the task does the
-// work. Used by the KEY button and the on-(re)connect trigger in loop().
-void requestRefreshAll() {
+// work. Only an explicit KEY press asks for audible completion feedback; Wi-Fi
+// reconnect refreshes and every scheduled/background update stay silent.
+void requestRefreshAll(bool chimeWhenDone = false) {
   forceWeather = forceClaude = forceCodex = forceGdoc = true;
   refreshInFlight = true;
+  if (chimeWhenDone) refreshChimePending = true;
 }
 
 // Run one feed if it is due or forced. Returns true if it actually ran, so the
@@ -714,8 +717,8 @@ void loop() {
   webHandle();  // serve any pending HTTP requests (kept out of the sample gate so it stays responsive)
   sdHotplugCheck();  // reload persisted data if the card was pulled + re-inserted
 
-  // Auto-refresh on the disconnected->connected edge (e.g. just after first-time
-  // setup), exactly like a KEY press, so the screen fills in as soon as we're online.
+  // Auto-refresh silently on the disconnected->connected edge (e.g. just after
+  // first-time setup), so the screen fills in as soon as we're online.
   bool wifiNow = wifiConnected();
   if (wifiNow && !wifiWasConnected) {
     logInfo("WiFi connected -> auto refresh");
@@ -730,7 +733,7 @@ void loop() {
     if (k == LOW) {
       logInfo("KEY pressed -> chime + refresh");
       playChimeShort();    // immediate press feedback
-      requestRefreshAll();  // the fetch task picks this up; loop() keeps running
+      requestRefreshAll(true);  // arm the completion chime; the fetch task does the work
     }
     keyPrev = k;
   }
@@ -769,7 +772,10 @@ void loop() {
   if (gdocCommit()) changed = true;
   if (changed) drawScreen();
 
-  if (wasRefreshing && !refreshInFlight) playChimeLong();  // a full refresh just finished
+  if (wasRefreshing && !refreshInFlight && refreshChimePending) {
+    refreshChimePending = false;
+    playChimeLong();  // only a user-requested refresh gets completion feedback
+  }
   wasRefreshing = refreshInFlight;
 
   if (now - lastSample >= SAMPLE_INTERVAL) {

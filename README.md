@@ -123,9 +123,9 @@ sequenceDiagram
     MAIN->>LCD: drawScreen, but only if a feed was promoted
     MAIN->>MAIN: webHandle and otaHandle stay responsive throughout
 
-    Note over USER,LOCK: you press KEY (a Wi-Fi reconnect does the same)
+    Note over USER,LOCK: you press KEY
     USER->>MAIN: KEY press
-    MAIN->>MAIN: playChimeShort, set all four force flags
+    MAIN->>MAIN: playChimeShort, set all four force flags, arm completion chime
     loop one feed per 200 ms wake
         FETCH->>LOCK: netTryLock, 50 ms
         alt radio free
@@ -151,7 +151,9 @@ sequenceDiagram
 
 Pressing KEY again mid-refresh **coalesces** rather than queueing: the force flags are booleans, so a
 second press re-arms all four feeds and extends the round in progress. Ten presses cost one long
-round, not ten rounds — though each press does re-fetch feeds that already completed.
+round, not ten rounds — though each press does re-fetch feeds that already completed. A Wi-Fi
+reconnect sets the same force flags so the display fills back in, but does so silently; scheduled
+updates are silent too. Only startup and a KEY-requested refresh play the chimes.
 
 ## Continuous integration
 
