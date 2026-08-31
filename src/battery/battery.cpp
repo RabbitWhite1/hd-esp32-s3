@@ -18,23 +18,55 @@ static const int BAT_SAMPLES = 16;  // average to suppress ADC noise
 static const float CHG_ENTER = 4.15f;  // above this -> a charger is pushing the cell
 static const float CHG_EXIT = 4.08f;   // back below this -> running on the battery again
 
-static float voltage = NAN;  // live measured terminal voltage
-static int percent = -1;     // SoC; held while charging
+// The curve is steep across the discharge plateaus, so a raw 2.9 mV ADC wobble
+// swings the percentage by a point or two. The percentage is therefore read off
+// an exponentially-smoothed voltage rather than the instantaneous one. At one
+// sample per SAMPLE_INTERVAL (10 s) this alpha is roughly a 10-sample average --
+// a ~100 s time constant, far quicker than the battery actually moves. The
+// reported/logged voltage stays raw so the log keeps its full resolution for a
+// future refit.
+static const float V_FILT_ALPHA = 0.18f;
+
+static float voltage = NAN;  // live measured terminal voltage (raw)
+static float vFilt = NAN;    // smoothed voltage the percentage is derived from
+static int percent = -1;     // runtime remaining; held while charging
 static bool charging = false;
 
-// Voltage -> charge curve for a single 18650 Li-ion cell, from a widely-cited
-// SoC reference table. The discharge curve is flat in the middle, so a plain
-// linear map reads badly; linear interpolation between these points follows the
-// real shape. The table is open-circuit voltage, but we feed the measured
-// (under-load) voltage straight in, so the reading runs slightly low while the
-// device is busy. Entries run from full to empty.
+// Voltage -> charge curve, FITTED from a measured full discharge of this
+// device's own cells (2026-08-27, 4.00 V down to cutoff at 2.89 V over 17.6 h,
+// 1058 one-minute samples logged by history.*).
+//
+// The percentage is deliberately *not* a textbook state-of-charge: each entry
+// is the fraction of RUNTIME REMAINING at that voltage, so 50% means about half
+// the hours left rather than half the coulombs. That is the question someone
+// glancing at the indicator is actually asking, and it is what the log can
+// measure directly -- it also absorbs any error in the 3:1 divider and the ADC
+// calibration, since the same reading path produced the fit.
+//
+// Entries are a 5% grid (21 points), which lands mean error at 0.5% -- about
+// 5 minutes over a 17.6 h run, comfortably inside the +-2.9 mV ADC noise that
+// alone moves the result by ~1%. Note how little voltage separates the middle
+// rows: the cell spends a quarter of its life between 3.90 and 3.95 V and
+// another quarter between 3.75 and 3.80 V, so voltage carries very little
+// information there. That flatness is physics, not a bad fit; it is why the
+// reading is filtered before it reaches this table.
+//
+// Refit from a fresh run if the cells are replaced or age noticeably: pull
+// battery_YYYY.csv, drop charging rows, label each sample with its true
+// fraction of remaining runtime, and regenerate this grid. Entries run from
+// full to empty.
 struct VPoint {
   float v;
   int pct;
 };
 static const VPoint CURVE[] = {
-  { 4.20f, 100 }, { 4.06f, 90 }, { 3.98f, 80 }, { 3.92f, 70 }, { 3.87f, 60 }, { 3.82f, 50 },
-  { 3.79f, 40 },  { 3.77f, 30 }, { 3.74f, 20 }, { 3.68f, 10 }, { 3.45f, 5 },  { 3.00f, 0 },
+ { 3.998f, 100 }, { 3.955f,  95 }, { 3.924f,  90 },
+ { 3.918f,  85 }, { 3.912f,  80 }, { 3.902f,  75 },
+ { 3.892f,  70 }, { 3.872f,  65 }, { 3.824f,  60 },
+ { 3.781f,  55 }, { 3.767f,  50 }, { 3.759f,  45 },
+ { 3.751f,  40 }, { 3.737f,  35 }, { 3.728f,  30 },
+ { 3.703f,  25 }, { 3.677f,  20 }, { 3.639f,  15 },
+ { 3.565f,  10 }, { 3.411f,   5 }, { 2.939f,   0 },
 };
 static const int CURVE_LEN = sizeof(CURVE) / sizeof(CURVE[0]);
 
@@ -59,6 +91,7 @@ void batteryUpdate() {
   for (int i = 0; i < BAT_SAMPLES; i++) accum += analogReadMilliVolts(BAT_ADC_PIN);
   float pinV = (accum / (float)BAT_SAMPLES) / 1000.0f;
   voltage = pinV * BAT_DIVIDER;
+  vFilt = isnan(vFilt) ? voltage : vFilt + V_FILT_ALPHA * (voltage - vFilt);
 
   if (!charging && voltage >= CHG_ENTER) charging = true;
   else if (charging && voltage <= CHG_EXIT) charging = false;
@@ -66,7 +99,7 @@ void batteryUpdate() {
   // The percentage must reflect the battery, not the charger-inflated voltage,
   // so refresh it only while running on the battery. It is also seeded once on
   // the first sample so a device booted already-charging still shows something.
-  if (!charging || percent < 0) percent = voltageToPercent(voltage);
+  if (!charging || percent < 0) percent = voltageToPercent(vFilt);
 }
 
 void batteryBegin() {
