@@ -129,7 +129,7 @@ void playChimeShort() {
   playNotes(notes, 1, 90);
 }
 
-// Longer ascending jingle signalling boot or a user-requested refresh finished.
+// Longer ascending jingle signalling a user-requested refresh finished.
 void playChimeLong() {
   const int notes[4] = { 880, 1047, 1319, 1568 };  // A5 - C6 - E6 - G6
   playNotes(notes, 4, 140);
@@ -673,7 +673,6 @@ void setup() {
   lastGdoc = millis();
   drawScreen();
 
-  playChimeLong();  // boot updates done
   wifiWasConnected = wifiConnected();  // seed the edge detector; boot already refreshed
 
   // Boot fetched everything synchronously above (the screen should be complete

@@ -11,7 +11,7 @@ An Arduino (Arduino-ESP32 framework) firmware for an **ESP32-S3** desktop weathe
 - fetches current+daily weather for the configured cities from `api.open-meteo.com` over HTTPS,
 - renders everything to a **300×400 ST7305 reflective monochrome LCD** via U8g2,
 - serves a LAN web UI for configuration, live status, sensor history, and firmware updates,
-- plays a synthesized chime through an **ES8311** codec on boot and on KEY-button press.
+- plays a synthesized chime through an **ES8311** codec on KEY-button press and when that requested refresh finishes.
 
 There is no build-config file in the repo; the facts below come from reading the source. `README.md` covers
 the library/board prerequisites, the build commands, and the Codex token relay.

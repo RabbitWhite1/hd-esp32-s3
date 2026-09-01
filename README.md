@@ -153,7 +153,7 @@ Pressing KEY again mid-refresh **coalesces** rather than queueing: the force fla
 second press re-arms all four feeds and extends the round in progress. Ten presses cost one long
 round, not ten rounds — though each press does re-fetch feeds that already completed. A Wi-Fi
 reconnect sets the same force flags so the display fills back in, but does so silently; scheduled
-updates are silent too. Only startup and a KEY-requested refresh play the chimes.
+updates are silent too. Only a KEY-requested refresh plays the chimes.
 
 ## Continuous integration
 
