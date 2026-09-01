@@ -5,10 +5,10 @@
 #include "../wifi_net/wifi_net.h"
 #include "../config/config.h"  // token + refresh interval persisted in esp32.json
 #include "../logging/logging.h"
+#include "../netsync/sync_flag.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <atomic>
 #include <math.h>
 
 // Trust anchor for the HTTPS fetch. This request mails the OAuth access token, so
@@ -59,7 +59,7 @@ struct Usage {
 };
 static Usage live = {false, NAN, NAN, 0, 0, "", 0};
 static Usage staged = {false, NAN, NAN, 0, 0, "", 0};
-static std::atomic<uint32_t> pending{0};
+static SyncFlag pending;
 
 // A failed fetch stages "not ok" while keeping the last good numbers, so the UI
 // shows a stale reading rather than blanking out.
@@ -122,7 +122,7 @@ static void readWindow(JsonVariantConst win, float *pct, int *winMin) {
 
 void codexUsageFetch() {
   // Do not overwrite the single staged slot until the loop task has consumed it.
-  if (pending.load(std::memory_order_acquire)) return;
+  if (pending.isSet()) return;
 
   if (!wifiConnected()) return;
   if (accessToken.length() == 0) return;  // no token relayed yet -> nothing to fetch
@@ -175,21 +175,21 @@ void codexUsageFetch() {
   else
     logWarn("Codex usage: no rate-limit windows in the response");
   staged = u;
-  pending.store(1, std::memory_order_release);
+  pending.set();
 }
 
 static void stageFailure() {
   staged = live;
   staged.ok = false;
-  pending.store(1, std::memory_order_release);
+  pending.set();
 }
 
 // Promote a staged result if one is waiting. Runs on the loop task, the only
 // reader of `live`, so nothing here races the fetch.
 bool codexUsageCommit() {
-  if (!pending.load(std::memory_order_acquire)) return false;
+  if (!pending.isSet()) return false;
   live = staged;
-  pending.store(0, std::memory_order_release);
+  pending.clear();
   return true;
 }
 

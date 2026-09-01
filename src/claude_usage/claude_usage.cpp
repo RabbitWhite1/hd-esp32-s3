@@ -5,10 +5,10 @@
 #include "../wifi_net/wifi_net.h"
 #include "../config/config.h"  // refresh interval persisted in esp32.json
 #include "../logging/logging.h"
+#include "../netsync/sync_flag.h"
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <atomic>
 #include <math.h>
 
 // Trust anchor for the HTTPS fetch. This request mails the sessionKey cookie, so
@@ -72,7 +72,7 @@ struct Usage {
 };
 static Usage live = {false, NAN, NAN, 0};
 static Usage staged = {false, NAN, NAN, 0};
-static std::atomic<uint32_t> pending{0};
+static SyncFlag pending;
 
 // A failed fetch stages "not ok" while keeping the last good numbers, so the UI
 // shows a stale reading rather than blanking out.
@@ -80,7 +80,7 @@ static void stageFailure();
 
 void claudeUsageFetch() {
   // Do not overwrite the single staged slot until the loop task has consumed it.
-  if (pending.load(std::memory_order_acquire)) return;
+  if (pending.isSet()) return;
 
   if (!wifiConnected()) return;
   if (sessionKey.length() == 0) return;  // not configured yet -> nothing to fetch
@@ -122,21 +122,21 @@ void claudeUsageFetch() {
   u.asOf = u.ok ? time(nullptr) : live.asOf;  // keep the old timestamp on a bad payload
   if (u.ok) logInfo("Claude usage: 5h %.0f%%  7d %.0f%%", u.fiveHour, u.sevenDay);
   staged = u;
-  pending.store(1, std::memory_order_release);
+  pending.set();
 }
 
 static void stageFailure() {
   staged = live;
   staged.ok = false;
-  pending.store(1, std::memory_order_release);
+  pending.set();
 }
 
 // Promote a staged result if one is waiting. Runs on the loop task, which is the
 // only reader of `live`, so nothing here races the fetch.
 bool claudeUsageCommit() {
-  if (!pending.load(std::memory_order_acquire)) return false;
+  if (!pending.isSet()) return false;
   live = staged;
-  pending.store(0, std::memory_order_release);
+  pending.clear();
   return true;
 }
 

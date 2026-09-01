@@ -914,6 +914,22 @@ static void handleWifiEdit() {
   respond(ok, msg);
 }
 
+// Parse the comma-separated old indices sent by the drag-sort controls. The
+// feature module validates that the result is a complete, unique permutation.
+static int parseIndexOrder(const String &csv, int *order, int capacity) {
+  int count = 0;
+  int start = 0;
+  while (start <= (int)csv.length() && count < capacity) {
+    int comma = csv.indexOf(',', start);
+    String token = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+    token.trim();
+    if (token.length()) order[count++] = token.toInt();
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+  return count;
+}
+
 // "Save order": apply the drag order if one was sent ("order" = CSV of old
 // indices in their new positions; empty = keep the current RAM order, e.g. the
 // no-JS / move-to-top path), then persist to SD. Dragging itself never hits the
@@ -924,17 +940,8 @@ static void handleWifiSave() {
   bool ok = true;
   if (csv.length()) {
     int order[16];  // matches MAX_NETS in wifi_net
-    int n = 0;
-    int start = 0;
-    while (start <= (int)csv.length() && n < 16) {
-      int comma = csv.indexOf(',', start);
-      String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
-      tok.trim();
-      if (tok.length()) order[n++] = tok.toInt();
-      if (comma < 0) break;
-      start = comma + 1;
-    }
-    ok = wifiApplyOrder(order, n);
+    int count = parseIndexOrder(csv, order, 16);
+    ok = wifiApplyOrder(order, count);
   }
   if (!ok) {
     respond(false, "Reorder failed");
@@ -945,13 +952,10 @@ static void handleWifiSave() {
   respond(saved, saved ? "Priority order saved" : "Save failed (SD card?)");
 }
 
+// Handlers that change settings read by the fetch task take the network guard.
+// It waits out the current fetch, keeps the worker away from mutable Strings and
+// city arrays, and also serialises any TLS request the handler performs itself.
 static void handleClaude() {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   // A pasted full cookie takes priority over the individual org/key fields.
   String cookie = server.hasArg("cookie") ? server.arg("cookie") : String("");
@@ -999,12 +1003,6 @@ static void handleFirmware() {
 }
 
 static void handleGdoc() {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   if (!server.hasArg("url")) {
     respond(false, "No URL provided");
@@ -1061,12 +1059,6 @@ static void handleFavicon() {
 }
 
 static void handleWeatherAdd() {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   String q = server.hasArg("city") ? server.arg("city") : "";
   String resolved;
@@ -1079,12 +1071,6 @@ static void handleWeatherAdd() {
 // only -> user clicks Save order). A change to the top set re-fetches the shown
 // cities so the LCD reflects it.
 static void handleWeatherEdit() {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
   String act = server.hasArg("act") ? server.arg("act") : "";
@@ -1106,29 +1092,14 @@ static void handleWeatherEdit() {
 // "Save order" for weather cities (mirrors handleWifiSave): apply the drag order
 // if sent, persist, then re-fetch the (possibly new) top cities.
 static void handleWeatherOrder() {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   String csv = server.hasArg("order") ? server.arg("order") : "";
   csv.trim();
   bool ok = true;
   if (csv.length()) {
     int order[16];  // matches MAX_CITIES in weather
-    int n = 0;
-    int start = 0;
-    while (start <= (int)csv.length() && n < 16) {
-      int comma = csv.indexOf(',', start);
-      String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
-      tok.trim();
-      if (tok.length()) order[n++] = tok.toInt();
-      if (comma < 0) break;
-      start = comma + 1;
-    }
-    ok = weatherApplyOrder(order, n);
+    int count = parseIndexOrder(csv, order, 16);
+    ok = weatherApplyOrder(order, count);
   }
   if (!ok) {
     respond(false, "Reorder failed");
@@ -1145,12 +1116,6 @@ static void handleWeatherOrder() {
 // JSON / redirect. An unchanged token is accepted without touching the SD card,
 // so an hourly relay doesn't rewrite esp32.json 24 times a day.
 static void applyCodexToken(bool machine) {
-  // Settings the fetch task reads while it works: reassigning a String it is
-  // mid-concatenation, or shifting cities[] under weatherUpdateAll(), corrupts
-  // the fetch. Taking the network lock the interactive way waits out any fetch
-  // in flight and keeps the task out for the duration -- it only touches this
-  // state while holding the same lock. Some of these handlers also do their own
-  // TLS (the geocode, the post-save gdoc refresh), which the guard covers too.
   NetGuard net(0);
   String tok = server.hasArg("token") ? server.arg("token") : String("");
   tok.trim();
