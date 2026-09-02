@@ -121,6 +121,19 @@ static void playNotes(const int *noteFreqs, int numNotes, int noteMs) {
       codec->CodecPort_PlayWrite(buf, chunk * 2 * sizeof(int16_t));
     }
   }
+
+  // Writes return once PCM is queued in I2S DMA, not once the speaker has played
+  // it. Give the final queued frames time to drain before disabling the amp;
+  // otherwise a short note can be cut off completely.
+  delay(120);
+
+  // `esp_codec_dev_open()` enables both I2S and the GPIO46 speaker power
+  // amplifier. Leaving playback open after a chime keeps that load alive while
+  // a KEY-requested refresh starts its first Wi-Fi/TLS handshake; on battery,
+  // the combined current spike can brown out and restart the board a second or
+  // two after the sound finishes. Closing is synchronous and the next chime
+  // reopens playback above, so power the whole audio path down between sounds.
+  codec->CodecPort_CloseSpeaker();
 }
 
 // Short single-note blip for immediate KEY-press feedback.
