@@ -551,6 +551,12 @@ void drawScreen() {
 static const uint32_t FETCH_TICK_MS = 200;
 static const uint32_t NET_TRY_MS = 50;  // background: glance at the radio, don't wait for it
 static const uint32_t FETCH_STACK = 10 * 1024;  // mbedTLS needs room; the loop task gets 8K
+// HTTPClient's response-body loop calls delay(0), which yields only to tasks at
+// the same or a higher priority. At priority 1 a sustained HTTPS response can
+// therefore starve CPU0's priority-0 idle task until its watchdog resets the
+// board. This worker is deliberately background work; at idle priority those
+// same yield points share CPU0 with IDLE0 while the loop task stays responsive.
+static const UBaseType_t FETCH_PRIORITY = tskIDLE_PRIORITY;
 
 // Set to force a feed on the next tick, cleared only once it has actually run --
 // so a feed skipped because the web UI held the radio is simply retried.
@@ -690,7 +696,7 @@ void setup() {
 
   // Boot fetched everything synchronously above (the screen should be complete
   // before we reach loop()); from here on the feeds run in the background.
-  xTaskCreate(fetchTask, "fetch", FETCH_STACK, nullptr, 1, nullptr);
+  xTaskCreate(fetchTask, "fetch", FETCH_STACK, nullptr, FETCH_PRIORITY, nullptr);
 }
 
 // Re-read everything persisted on the SD card (call after a card is (re)mounted).

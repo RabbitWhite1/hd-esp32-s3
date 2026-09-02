@@ -19,6 +19,8 @@
 #include "../logging/logging.h"
 #include "favicon.h"                       // embedded 32x32 ICO favicon
 #include <WebServer.h>
+#include <esp_core_dump.h>
+#include <esp_system.h>
 #include <time.h>
 
 static WebServer server(80);
@@ -1299,6 +1301,68 @@ static void handleStats() {
   server.send(200, "application/json", j);
 }
 
+// Read-only crash diagnostics for failures that occur away from a serial cable.
+// Arduino-ESP32 stores panic core dumps in the dedicated 64 KB flash partition;
+// OTA replaces only an app slot, so a newly flashed diagnostic build can still
+// summarize the crash produced by the previous image.
+static void handleDiagnostics() {
+  String j = "{\"firmware\":\"";
+  j += jsonEscape(FW_VERSION);
+  j += "\",\"reset_reason\":";
+  j += String((int)esp_reset_reason());
+  j += ",\"uptime_ms\":";
+  j += String(millis());
+  j += ",\"heap_free\":";
+  j += String((unsigned)ESP.getFreeHeap());
+  j += ",\"heap_min_free\":";
+  j += String((unsigned)ESP.getMinFreeHeap());
+  j += ",\"heap_largest_block\":";
+  j += String((unsigned)ESP.getMaxAllocHeap());
+
+  esp_err_t check = esp_core_dump_image_check();
+  j += ",\"coredump_status\":\"";
+  j += esp_err_to_name(check);
+  j += "\"";
+  if (check == ESP_OK) {
+    char reason[200] = {};
+    esp_err_t reasonErr = esp_core_dump_get_panic_reason(reason, sizeof(reason));
+    j += ",\"panic_reason\":";
+    if (reasonErr == ESP_OK) {
+      j += "\"";
+      j += jsonEscape(reason);
+      j += "\"";
+    } else {
+      j += "null";
+    }
+
+    esp_core_dump_summary_t summary = {};
+    esp_err_t summaryErr = esp_core_dump_get_summary(&summary);
+    j += ",\"summary_status\":\"";
+    j += esp_err_to_name(summaryErr);
+    j += "\"";
+    if (summaryErr == ESP_OK) {
+      j += ",\"exception_task\":\"";
+      j += jsonEscape(summary.exc_task);
+      j += "\",\"exception_pc\":\"0x";
+      j += String(summary.exc_pc, HEX);
+      j += "\",\"exception_cause\":";
+      j += String(summary.ex_info.exc_cause);
+      j += ",\"exception_vaddr\":\"0x";
+      j += String(summary.ex_info.exc_vaddr, HEX);
+      j += "\",\"backtrace\":[";
+      for (uint32_t i = 0; i < summary.exc_bt_info.depth; i++) {
+        if (i) j += ',';
+        j += "\"0x";
+        j += String(summary.exc_bt_info.bt[i], HEX);
+        j += "\"";
+      }
+      j += ']';
+    }
+  }
+  j += "}\n";
+  server.send(200, "application/json", j);
+}
+
 static long bucketSeconds(const String &b) {
   if (b == "minutely") return 60;
   if (b == "hourly") return 3600;
@@ -1339,6 +1403,7 @@ void webBegin() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/favicon.ico", HTTP_GET, handleFavicon);  // embedded star icon
   server.on("/stats", HTTP_GET, handleStats);    // curl-friendly JSON snapshot
+  server.on("/diagnostics", HTTP_GET, handleDiagnostics);  // reset/core-dump + heap snapshot
   server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW charts
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
