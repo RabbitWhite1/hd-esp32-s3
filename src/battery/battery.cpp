@@ -12,12 +12,16 @@ static const float BAT_DIVIDER = 3.0f;
 // This board's high-impedance divider occasionally yields a failed zero-valued
 // conversion. Averaging those failures is actively harmful: one good 4.14 V
 // sample plus fifteen zeroes becomes a believable-looking but false 0.26 V.
-// Gather a small set of plausible conversions instead and use their median.
-static const int BAT_TARGET_SAMPLES = 7;
+// Gather a larger set, then use the highest repeatable cluster: the observed
+// failure mode only pulls conversions downward as the ADC input incompletely
+// settles, while good conversions agree closely at the top of the distribution.
 static const int BAT_READ_ATTEMPTS = 64;
-static const uint32_t BAT_PIN_MIN_MV = 800;   // 2.4 V at the cell, below its cutoff
-static const uint32_t BAT_PIN_MAX_MV = 1800;  // 5.4 V at the cell, above charger output
+static const uint32_t BAT_PIN_MIN_MV = 950;   // 2.85 V at the cell, below its cutoff
+static const uint32_t BAT_PIN_MAX_MV = 1500;  // 4.5 V at the cell, above charger output
+static const uint32_t BAT_CLUSTER_SPAN_MV = 15;
+static const int BAT_CLUSTER_MIN_SAMPLES = 3;
 static const int BAT_BAD_BATCH_LIMIT = 6;    // keep the last good value for one minute
+static const float BAT_MAX_DROP = 0.25f;      // a real cell cannot fall this far in 10 s
 
 // Charging is inferred from the terminal voltage (no status pin exists). On
 // battery the loaded terminal tops out near 4.05 V; a charger drives it up to
@@ -40,6 +44,8 @@ static float vFilt = NAN;    // smoothed voltage the percentage is derived from
 static int percent = -1;     // runtime remaining; held while charging
 static bool charging = false;
 static int badBatches = 0;
+static float lowCandidate = NAN;
+static int lowCandidateBatches = 0;
 
 // Voltage -> charge curve, FITTED from a measured full discharge of this
 // device's own cells (2026-08-27, 4.00 V down to cutoff at 2.89 V over 17.6 h,
@@ -93,31 +99,34 @@ static int voltageToPercent(float v) {
   return 0;
 }
 
+static void markBadBatch() {
+  // A short run of ADC failures must not turn a healthy cell into 0%. If the
+  // signal stays absent for a full minute, expose it as unavailable instead
+  // of retaining a stale battery reading forever (e.g. after battery removal).
+  if (++badBatches >= BAT_BAD_BATCH_LIMIT) {
+    voltage = NAN;
+    vFilt = NAN;
+    percent = -1;
+    charging = false;
+  }
+}
+
 void batteryUpdate() {
   // analogReadMilliVolts() applies the per-chip ADC calibration, so we get
   // millivolts at the pin directly rather than raw counts. Failed conversions
   // return zero in Arduino-ESP32, so reject anything outside the electrically
   // possible battery range rather than folding it into an average.
-  uint16_t good[BAT_TARGET_SAMPLES];
+  uint16_t good[BAT_READ_ATTEMPTS];
   int goodCount = 0;
-  for (int i = 0; i < BAT_READ_ATTEMPTS && goodCount < BAT_TARGET_SAMPLES; i++) {
+  for (int i = 0; i < BAT_READ_ATTEMPTS; i++) {
     uint32_t mv = analogReadMilliVolts(BAT_ADC_PIN);
     if (mv >= BAT_PIN_MIN_MV && mv <= BAT_PIN_MAX_MV) good[goodCount++] = (uint16_t)mv;
     delayMicroseconds(200);  // let the divider and ADC sample capacitor settle
   }
   if (goodCount == 0) {
-    // A short run of ADC failures must not turn a healthy cell into 0%. If the
-    // signal stays absent for a full minute, expose it as unavailable instead
-    // of retaining a stale battery reading forever (e.g. after battery removal).
-    if (++badBatches >= BAT_BAD_BATCH_LIMIT) {
-      voltage = NAN;
-      vFilt = NAN;
-      percent = -1;
-      charging = false;
-    }
+    markBadBatch();
     return;
   }
-  badBatches = 0;
   for (int i = 1; i < goodCount; i++) {
     uint16_t v = good[i];
     int j = i;
@@ -127,8 +136,42 @@ void batteryUpdate() {
     }
     good[j] = v;
   }
-  float pinV = good[goodCount / 2] / 1000.0f;
-  voltage = pinV * BAT_DIVIDER;
+
+  // Work down from the highest readings until at least three agree within a
+  // narrow window. An isolated high spike is ignored, as are the much larger
+  // groups of partial/zero conversions below the real divider voltage.
+  int chosen = -1;
+  for (int end = goodCount - 1; end >= 0;) {
+    int start = end;
+    while (start > 0 && good[end] - good[start - 1] <= BAT_CLUSTER_SPAN_MV) start--;
+    if (end - start + 1 >= BAT_CLUSTER_MIN_SAMPLES) {
+      chosen = good[(start + end) / 2];
+      break;
+    }
+    end = start - 1;
+  }
+  if (chosen < 0) {
+    markBadBatch();
+    return;
+  }
+
+  float candidate = (chosen / 1000.0f) * BAT_DIVIDER;
+  if (!isnan(voltage) && candidate < voltage - BAT_MAX_DROP) {
+    // Require a large drop to repeat for a minute before believing it. This
+    // rejects partial conversions but still permits a deliberately swapped or
+    // deeply discharged cell to become the new baseline eventually.
+    if (isnan(lowCandidate) || fabsf(candidate - lowCandidate) > 0.10f) {
+      lowCandidate = candidate;
+      lowCandidateBatches = 1;
+    } else {
+      lowCandidateBatches++;
+    }
+    if (lowCandidateBatches < BAT_BAD_BATCH_LIMIT) return;
+  }
+  lowCandidate = NAN;
+  lowCandidateBatches = 0;
+  badBatches = 0;
+  voltage = candidate;
   vFilt = isnan(vFilt) ? voltage : vFilt + V_FILT_ALPHA * (voltage - vFilt);
 
   if (!charging && voltage >= CHG_ENTER) charging = true;
