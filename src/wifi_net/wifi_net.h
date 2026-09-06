@@ -6,12 +6,15 @@
 
 // Wi-Fi backend: station connect/reconnect/status, plus a small list of saved
 // networks (persisted to SD). wifiBegin() tries each saved network in turn, then
-// falls back to the hardcoded default. New networks are only added once proven
-// connectable (see wifiAddNetwork), keeping the saved list known-good.
-void wifiBegin();            // join a known network (saved list first, then the hardcoded default)
-void wifiEnsureConnected();  // reconnect if the link has dropped
+// starts the setup AP if none can be joined. New networks are only added once
+// proven connectable (see wifiAddNetwork), keeping the saved list known-good.
+void wifiBegin();            // join a saved network, or start the setup AP
+// Reconnect if the link has dropped. Automatic retries pause while the setup AP
+// is active so its captive portal remains responsive; portal submissions still
+// test the user-selected network explicitly through wifiAddNetwork().
+void wifiEnsureConnected();
 bool wifiConnected();
-const char *wifiSSID();      // the currently-joined network name (falls back to the default)
+const char *wifiSSID();      // the currently-joined network name ("" until joined)
 String wifiIP();             // dotted-quad string, or "" when disconnected
 const char *wifiHostname();  // mDNS hostname; the device is reachable at "<name>.local"
 const char *wifiStatus();    // transient footer line during connect attempts ("" when idle/joined)

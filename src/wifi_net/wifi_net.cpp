@@ -114,8 +114,17 @@ void wifiLoop() {
   // Deferred AP teardown: once we've joined a real network we keep the AP up for
   // a short grace period so the setup page's "Connected" reply can reach the phone.
   if (apStopAt && (int32_t)(millis() - apStopAt) >= 0) {
-    stopSetupAP();
-    startMdns();  // re-advertise on the freshly joined network
+    if (WiFi.status() == WL_CONNECTED) {
+      stopSetupAP();
+      startMdns();  // re-advertise on the freshly joined network
+    } else {
+      // The candidate link died during the grace period. Keep the only usable
+      // configuration path alive rather than stranding the user with no AP.
+      apStopAt = 0;
+      currentSsid = "";
+      setSetupStatus();
+      logWarn("WiFi setup AP kept up: station disconnected before teardown");
+    }
     if (redrawHook) redrawHook();
   }
 }
@@ -164,6 +173,11 @@ void wifiBegin() {
 
 void wifiEnsureConnected() {
   if (WiFi.status() == WL_CONNECTED) return;
+  // Once fallback setup mode is active, keep it stable until the user explicitly
+  // tests a network through the portal. wifiBegin() is synchronous and can spend
+  // 8 s on every saved network; repeating it here starves both captive DNS and the
+  // web server, making the setup AP look as though it keeps disappearing.
+  if (apMode) return;
   // Retry at most once every 30 s (this also rate-limits the "no known network
   // joined" log) instead of hammering wifiBegin() on every loop iteration.
   static uint32_t lastAttempt = 0;
@@ -263,7 +277,14 @@ bool wifiAddNetwork(const String &s, const String &p) {
   // so the requesting browser may briefly lose the device until it rejoins.
   if (!tryConnect(s.c_str(), p.c_str(), 12000)) {
     logWarn("WiFi add rejected (can't connect): %s", s.c_str());
-    wifiBegin();  // restore a known-good network now (bypassing the 30 s throttle)
+    if (apMode) {
+      // The setup AP remains available in WIFI_AP_STA mode. Do not run all saved
+      // networks here: that would block the failure response and captive portal.
+      currentSsid = "";
+      setSetupStatus();
+    } else {
+      wifiBegin();  // restore a known-good network now (bypassing the 30 s throttle)
+    }
     return false;
   }
   bool ok = upsertNetwork(s, p);  // connected; now persist (may fail if no SD)
