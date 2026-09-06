@@ -151,6 +151,112 @@ static void addGhHeaders(HTTPClient &http, const char *accept) {
   if (tok.length()) http.addHeader("Authorization", String("Bearer ") + tok);
 }
 
+// HTTPClient exposes its raw socket through getStream(); its own chunk decoder
+// is only used by writeToStream(). This pull-style adapter removes HTTP/1.1 chunk
+// framing while ArduinoJson reads, retaining partial framing across short gaps in
+// the TLS stream and never buffering the response body.
+class HttpChunkDecodingStream : public Stream {
+ public:
+  explicit HttpChunkDecodingStream(Stream &source) : source(source) {}
+
+  int available() override {
+    if (finished || failed) return 0;
+    int n = source.available();
+    if (remaining && n > (int)remaining) n = (int)remaining;
+    return n;
+  }
+
+  int read() override {
+    if (!prepareChunk()) {
+      if (!finished && !failed) delay(1);  // keep a slow TLS packet gap watchdog-safe
+      return -1;
+    }
+    int c = source.read();
+    if (c < 0) {
+      delay(1);  // Stream::readBytes retries until this adapter's timeout
+      return -1;
+    }
+    if (--remaining == 0) {
+      needCrlf = true;
+      crlfRead = 0;
+    }
+    return c;
+  }
+
+  int peek() override {
+    return prepareChunk() ? source.peek() : -1;
+  }
+
+  void flush() override {
+    source.flush();
+  }
+
+  size_t write(uint8_t) override {
+    return 0;  // read-only adapter
+  }
+
+  bool decodeFailed() const {
+    return failed;
+  }
+
+ private:
+  bool prepareChunk() {
+    if (finished || failed) return false;
+    if (remaining) return true;
+
+    // Consume the CRLF after the previous chunk. Keep crlfRead when the socket
+    // briefly has no byte so the next read resumes rather than losing framing.
+    if (needCrlf) {
+      static const char expected[] = {'\r', '\n'};
+      while (crlfRead < 2) {
+        int c = source.read();
+        if (c < 0) return false;
+        if (c != expected[crlfRead++]) {
+          failed = true;
+          return false;
+        }
+      }
+      needCrlf = false;
+      headerLen = 0;
+    }
+
+    // Read one hexadecimal chunk-size line. Extensions are legal and ignored.
+    while (true) {
+      int c = source.read();
+      if (c < 0) return false;
+      if (c == '\n') break;
+      if (headerLen + 1 >= sizeof(header)) {
+        failed = true;
+        return false;
+      }
+      if (c != '\r') header[headerLen++] = (char)c;
+    }
+    header[headerLen] = '\0';
+    char *end = nullptr;
+    unsigned long size = strtoul(header, &end, 16);
+    if (end == header || (*end && *end != ';')) {
+      failed = true;
+      return false;
+    }
+    headerLen = 0;
+    if (size == 0) {
+      finished = true;  // trailers are irrelevant once the JSON body is complete
+      return false;
+    }
+    remaining = (size_t)size;
+    return true;
+  }
+
+  Stream &source;
+  size_t remaining = 0;
+  char header[24];
+  uint8_t headerLen = 0;
+  uint8_t crlfRead = 0;
+  bool needCrlf = false;
+  bool finished = false;
+  bool failed = false;
+};
+
 bool ghRefreshIfStale(unsigned long maxAgeSec) {
   bool fresh = listedMs && (millis() - listedMs < maxAgeSec * 1000UL);
   if (fresh && relCount > 0) return true;
@@ -167,12 +273,6 @@ bool ghRefresh() {
   WiFiClientSecure client;
   client.setInsecure();  // the image is verified by SHA-256, not by the chain
   HTTPClient http;
-  // getStream() exposes HTTPClient's raw transport and therefore does not remove
-  // HTTP/1.1 chunk framing. GitHub normally sends this endpoint chunked, which
-  // makes ArduinoJson see a truncated document and report IncompleteInput. Ask
-  // for HTTP/1.0 so GitHub returns one identity-encoded, Content-Length body that
-  // can still be filtered directly from the stream without buffering it in RAM.
-  http.useHTTP10(true);
   http.setTimeout(15000);
   String url = "https://api.github.com/repos/" + repoName() +
                "/releases?per_page=" + String(MAX_RELEASES);
@@ -180,6 +280,8 @@ bool ghRefresh() {
     lastError = "connection failed";
     return false;
   }
+  const char *responseHeaders[] = {"Transfer-Encoding"};
+  http.collectHeaders(responseHeaders, 1);
   addGhHeaders(http, "application/vnd.github+json");
   int code = http.GET();
   if (code != 200) {
@@ -198,11 +300,16 @@ bool ghRefresh() {
   filter[0]["assets"][0]["id"] = true;
   filter[0]["assets"][0]["size"] = true;
   JsonDocument doc;
-  DeserializationError err =
-      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  bool chunked = http.header("Transfer-Encoding").equalsIgnoreCase("chunked");
+  HttpChunkDecodingStream decoded(http.getStream());
+  Stream &body = chunked ? static_cast<Stream &>(decoded)
+                         : static_cast<Stream &>(http.getStream());
+  body.setTimeout(15000);
+  DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
   http.end();
   if (err) {
-    lastError = String("parse error: ") + err.c_str();
+    lastError = decoded.decodeFailed() ? "parse error: invalid HTTP chunks"
+                                       : String("parse error: ") + err.c_str();
     return false;
   }
 
