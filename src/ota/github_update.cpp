@@ -167,6 +167,13 @@ bool ghRefresh() {
   WiFiClientSecure client;
   client.setInsecure();  // the image is verified by SHA-256, not by the chain
   HTTPClient http;
+  // getStream() exposes HTTPClient's raw transport and therefore does not remove
+  // HTTP/1.1 chunk framing. GitHub normally sends this endpoint chunked, which
+  // makes ArduinoJson see a truncated document and report IncompleteInput. Ask
+  // for HTTP/1.0 so GitHub returns one identity-encoded, Content-Length body that
+  // can still be filtered directly from the stream without buffering it in RAM.
+  http.useHTTP10(true);
+  http.setTimeout(15000);
   String url = "https://api.github.com/repos/" + repoName() +
                "/releases?per_page=" + String(MAX_RELEASES);
   if (!http.begin(client, url)) {
