@@ -356,6 +356,7 @@ static void handleRoot() {
           "<a class='nav-link' href='#intervals'>Refresh intervals</a>"
           "<a class='nav-link' href='#claude'>Claude usage</a>"
           "<a class='nav-link' href='#codex'>Codex usage</a>"
+          "<a class='nav-link' href='#mdns'>mDNS name</a>"
           "<a class='nav-link' href='#wifi'>Wi-Fi</a>"
           "</nav></div>"
           "<div class='col-12 col-md-9'>";
@@ -584,6 +585,21 @@ static void handleRoot() {
   html += "</code></pre>"
           "<p class='form-text mb-0'>Remove it again with "
           "<code>crontab -l | grep -v codextoken | crontab -</code>.</p></details>";
+  html += cardClose;
+
+  // mDNS host label persisted in esp32.json. The suffix is deliberately a
+  // non-editable input-group label: users choose only the single name before
+  // ".local", and the backend validates the same rule independently of HTML.
+  html += cardOpen("mdns", "mDNS name", saveBtn("mdnsform"));
+  html += "<form id='mdnsform' action='/mdns' method='POST'>"
+          "<label class='form-label'>Local hostname</label>"
+          "<div class='input-group'><input type='text' class='form-control' name='name' "
+          "required maxlength='63' pattern='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?' value='";
+  html += htmlEscape(wifiHostname());
+  html += "'><span class='input-group-text'>.local</span></div>"
+          "<div class='form-text'>Use 1&ndash;63 letters, numbers, or hyphens; "
+          "the name cannot begin or end with a hyphen. Default: <code>esp32.local</code>.</div>"
+          "</form>";
   html += cardClose;
 
   // Wi-Fi: list the saved (known-good) networks and add a new one. A network is
@@ -861,7 +877,7 @@ static void handleWifi() {
   // The setup flow must actually connect, so force a test there.
   bool test = setupFlow || (server.arg("mode") != "store");
   // Note: testing a new network drops the current link, so this HTTP response
-  // may not reach the browser; reconnect via http://esp32.local/ afterwards.
+  // may not reach the browser; reconnect via the configured <name>.local afterwards.
   bool ok = test ? wifiAddNetwork(s, p) : wifiStoreNetwork(s, p);
   logInfo("WiFi %s via web: %s -> %s", test ? "test+add" : "add", s.c_str(), ok ? "saved" : "rejected");
   if (setupFlow) {
@@ -896,6 +912,18 @@ static void handleWifi() {
   else
     respond(ok, ok ? ("Saved (not tested): " + s)
                    : (s.length() ? "Save failed (SD card?)" : "SSID required"));
+}
+
+static void handleMdns() {
+  String name = server.hasArg("name") ? server.arg("name") : "";
+  if (!wifiHostnameValid(name)) {
+    respond(false, "Use 1-63 letters, numbers, or hyphens; no .local suffix");
+    return;
+  }
+  bool ok = wifiSetHostname(name);  // persist, then re-advertise immediately
+  String address = String(wifiHostname()) + ".local";
+  logInfo("mDNS name update via web: %s -> %s", address.c_str(), ok ? "saved" : "save failed");
+  respond(ok, ok ? ("mDNS name saved: " + address) : "Save failed (SD card?)");
 }
 
 static void handleWifiEdit() {
@@ -1416,6 +1444,7 @@ void webBegin() {
   server.on("/weatheradd", HTTP_POST, handleWeatherAdd);
   server.on("/weatheredit", HTTP_POST, handleWeatherEdit);
   server.on("/weatherorder", HTTP_POST, handleWeatherOrder);
+  server.on("/mdns", HTTP_POST, handleMdns);
   // Serve the cached third-party assets (Bootstrap) from SD for offline use.
   for (int i = 0; i < assetCount(); i++)
     server.on(assetAt(i)->route, HTTP_GET, handleAsset);

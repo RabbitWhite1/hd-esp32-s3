@@ -17,10 +17,20 @@ bool wifiConnected();
 const char *wifiSSID();      // the currently-joined network name ("" until joined)
 String wifiIP();             // dotted-quad string, or "" when disconnected
 const char *wifiHostname();  // mDNS hostname; the device is reachable at "<name>.local"
+// The configurable mDNS host label lives in esp32.json as "mdns_name". Only one
+// DNS label is accepted (1-63 lowercase-normalized letters/digits/hyphens), so a
+// caller cannot replace or include the fixed ".local" suffix. Set persists and
+// re-advertises immediately when connected; the missing/invalid default is esp32.
+void wifiLoadHostname();
+bool wifiHostnameValid(const String &name);
+bool wifiSetHostname(const String &name);
 const char *wifiStatus();    // transient footer line during connect attempts ("" when idle/joined)
 // Register a frontend redraw (e.g. drawScreen) invoked while wifiBegin() iterates
 // the saved networks, so the footer can show "Trying <ssid>" live.
 void wifiSetRedrawHook(void (*fn)());
+// Register a backend hook invoked after mDNS starts/restarts, so services owned
+// by other modules (currently ArduinoOTA) can restore their advertisements.
+void wifiSetMdnsStartedHook(void (*fn)());
 
 // Saved-network list (persisted to /sdcard/wifi.txt).
 void wifiLoadNetworks();     // load the saved list from SD (call before wifiBegin)

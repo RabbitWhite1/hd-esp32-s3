@@ -10,7 +10,7 @@ device.
   cities on the LCD.
 - Cycle between the overview, a shared Google Doc, and a to-do list.
 - View sensor and battery history from a phone or computer on the same network.
-- Configure Wi-Fi, cities, time zones, update intervals, and integrations in a web UI.
+- Configure Wi-Fi, the local mDNS name, cities, time zones, update intervals, and integrations in a web UI.
 - Show Claude and Codex usage limits.
 - Install released firmware from the web UI or upload a local build over USB or Wi-Fi.
 
@@ -24,7 +24,8 @@ device.
 4. On the same LAN, open [http://esp32.local](http://esp32.local). If mDNS is unavailable, use the IP
    address shown by the device or in the serial log.
 5. Open **Configuration** to choose time zones and cities and, if wanted, configure the Google Doc,
-   Claude usage, Codex usage, refresh intervals, and firmware source.
+   Claude usage, Codex usage, refresh intervals, mDNS name, and firmware source. The mDNS field edits
+   only the label before the fixed `.local` suffix; its default is `esp32.local`.
 
 The web UI has no user login, and integration credentials are stored on the SD card. Keep the device
 on a trusted network and treat the card as sensitive.

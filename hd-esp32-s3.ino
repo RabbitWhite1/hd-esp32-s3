@@ -653,6 +653,7 @@ void setup() {
   // Settings that come from config (esp32.json) need configBegin() first (done above).
   claudeUsageLoad();  // restore the Claude org id + session key from config
   codexUsageLoad();   // restore the relayed Codex access token from config
+  wifiLoadHostname();  // restore the mDNS label before the first connection advertises it
   wifiLoadNetworks();
   gdocLoadUrl();  // restore the configured Google Doc URL before the first gdocUpdate()
   timeLoadZones();  // restore the selected primary/secondary time zones before timeBegin()
@@ -710,6 +711,7 @@ void reloadFromSd() {
   configBegin();
   claudeUsageLoad();
   codexUsageLoad();
+  wifiLoadHostname();
   wifiLoadNetworks();
   gdocLoadUrl();
   timeLoadZones();

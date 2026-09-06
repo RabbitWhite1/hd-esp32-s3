@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #include "wifi_net.h"
+#include "../config/config.h"
 #include "../sdcard/sdcard.h"
 #include "../logging/logging.h"
 #include <WiFi.h>
@@ -9,8 +10,11 @@
 #include <DNSServer.h>
 
 // No Wi-Fi network is baked into the firmware; the device connects only to its
-// saved networks (loaded from the SD card / added via the web UI).
-static const char *hostname = "esp32";  // advertised over mDNS as "esp32.local"
+// saved networks (loaded from the SD card / added via the web UI). The mDNS name
+// is configurable, but its default remains the familiar esp32.local.
+static const char *HOSTNAME_KEY = "mdns_name";
+static const char *HOSTNAME_DEFAULT = "esp32";
+static String hostname = HOSTNAME_DEFAULT;
 
 // ---------- saved networks (loaded from / saved to SD) ----------
 struct WifiNet {
@@ -24,9 +28,13 @@ static String currentSsid = "";  // name of the network we are actually joined t
 
 static String statusMsg = "";           // transient footer line during connection attempts
 static void (*redrawHook)() = nullptr;  // frontend redraw, called when statusMsg changes
+static void (*mdnsStartedHook)() = nullptr;  // lets OTA restore its service after an mDNS restart
 
 void wifiSetRedrawHook(void (*fn)()) {
   redrawHook = fn;
+}
+void wifiSetMdnsStartedHook(void (*fn)()) {
+  mdnsStartedHook = fn;
 }
 const char *wifiStatus() {
   return statusMsg.c_str();
@@ -39,9 +47,10 @@ static void setStatus(const String &s) {
 // Re-advertise the web UI over mDNS. end() first so a reconnect restarts cleanly.
 static void startMdns() {
   MDNS.end();
-  if (MDNS.begin(hostname)) {
+  if (MDNS.begin(hostname.c_str())) {
     MDNS.addService("http", "tcp", 80);
-    logInfo("mDNS started: %s.local", hostname);
+    if (mdnsStartedHook) mdnsStartedHook();
+    logInfo("mDNS started: %s.local", hostname.c_str());
   } else {
     logWarn("mDNS start failed");
   }
@@ -196,7 +205,61 @@ const char *wifiSSID() {
 }
 
 const char *wifiHostname() {
-  return hostname;
+  return hostname.c_str();
+}
+
+// Normalize and validate one DNS host label. Deliberately reject dots: the web
+// UI owns the fixed ".local" suffix, and only this label is user-configurable.
+static bool normalizeHostname(const String &input, String &out) {
+  out = input;
+  out.trim();
+  out.toLowerCase();
+  int len = out.length();
+  if (len < 1 || len > 63 || out[0] == '-' || out[len - 1] == '-') return false;
+  for (int i = 0; i < len; i++) {
+    char c = out[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return false;
+  }
+  return true;
+}
+
+bool wifiHostnameValid(const String &name) {
+  String normalized;
+  return normalizeHostname(name, normalized);
+}
+
+void wifiLoadHostname() {
+  String loaded;
+  bool needsSave = configDoc()[HOSTNAME_KEY].isNull();
+  String saved = configGet(HOSTNAME_KEY, HOSTNAME_DEFAULT);
+  if (!normalizeHostname(saved, loaded)) {
+    logWarn("Invalid saved mDNS name; using %s.local", HOSTNAME_DEFAULT);
+    loaded = HOSTNAME_DEFAULT;
+    needsSave = true;
+  }
+  if (loaded != saved) needsSave = true;  // persist lowercase normalization too
+  bool changed = loaded != hostname;
+  hostname = loaded;
+  if (needsSave) {
+    configSet(HOSTNAME_KEY, hostname);
+    if (!configSave()) logWarn("mDNS name: could not seed config (SD card?)");
+  }
+  if (changed && wifiConnected()) startMdns();
+}
+
+bool wifiSetHostname(const String &name) {
+  String normalized;
+  if (!normalizeHostname(name, normalized)) return false;
+  String previous = configGet(HOSTNAME_KEY, HOSTNAME_DEFAULT);
+  configSet(HOSTNAME_KEY, normalized);
+  if (!configSave()) {
+    configSet(HOSTNAME_KEY, previous);  // don't let a later unrelated save persist a failed change
+    return false;
+  }
+  bool changed = normalized != hostname;
+  hostname = normalized;
+  if (changed && wifiConnected()) startMdns();
+  return true;
 }
 
 String wifiIP() {

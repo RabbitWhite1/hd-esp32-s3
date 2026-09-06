@@ -21,6 +21,13 @@ static int lastDrawnPct = -1;
 static String status = "";
 static void (*redrawHook)() = nullptr;
 
+// wifi_net owns and may restart the responder when the configured hostname
+// changes. Restore OTA's service record each time without reinitializing OTA.
+static void advertiseArduinoOta() {
+  String pass = configGet(OTA_PASS_KEY);
+  MDNS.enableArduino(OTA_PORT, pass.length() > 0);
+}
+
 void otaSetRedrawHook(void (*fn)()) {
   redrawHook = fn;
 }
@@ -90,8 +97,9 @@ void otaBegin() {
   });
 
   ArduinoOTA.begin();
-  MDNS.enableArduino(OTA_PORT, pass.length() > 0);  // advertise so `-p esp32.local` resolves
   started = true;
+  wifiSetMdnsStartedHook(advertiseArduinoOta);
+  advertiseArduinoOta();  // advertise so arduino-cli can discover <name>.local
   logInfo("OTA ready at %s.local:%d (%s)", wifiHostname(), OTA_PORT,
           pass.length() ? "password set" : "no password");
 }
