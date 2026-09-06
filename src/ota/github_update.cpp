@@ -161,6 +161,9 @@ class HttpChunkDecodingStream : public Stream {
 
   int available() override {
     if (finished || failed) return 0;
+    if (!remaining) {
+      if (source.available() <= 0 || !prepareChunk()) return 0;
+    }
     int n = source.available();
     if (remaining && n > (int)remaining) n = (int)remaining;
     return n;
@@ -197,6 +200,10 @@ class HttpChunkDecodingStream : public Stream {
 
   bool decodeFailed() const {
     return failed;
+  }
+
+  bool decodeFinished() const {
+    return finished;
   }
 
  private:
@@ -395,19 +402,34 @@ static bool resolveAsset(uint32_t id, AssetSource &src) {
 
 // Open the resolved URL for reading. The caller owns the client/http pair, so
 // only one TLS session is ever live at a time.
-static bool openAsset(const AssetSource &src, WiFiClientSecure &client, HTTPClient &http) {
+static bool openAsset(const AssetSource &src, WiFiClientSecure &client, HTTPClient &http,
+                      uint32_t offset = 0) {
   client.setInsecure();
   if (!http.begin(client, src.url)) {
     lastError = "connection failed";
     return false;
   }
+  http.setTimeout(30000);
+  const char *responseHeaders[] = {"Content-Range", "Transfer-Encoding"};
+  http.collectHeaders(responseHeaders, 2);
   if (src.needAuth) addGhHeaders(http, "application/octet-stream");
   else http.setUserAgent("hd-esp32-s3");  // the signed URL carries its own auth
+  http.addHeader("Accept-Encoding", "identity");
+  if (offset) http.addHeader("Range", "bytes=" + String(offset) + "-");
   int code = http.GET();
-  if (code != 200) {
+  int wantedCode = offset ? 206 : 200;
+  if (code != wantedCode) {
     lastError = "asset HTTP " + String(code) + " (heap " + String((unsigned)ESP.getFreeHeap()) + ")";
     http.end();
     return false;
+  }
+  if (offset) {
+    String prefix = "bytes " + String(offset) + "-";
+    if (!http.header("Content-Range").startsWith(prefix)) {
+      lastError = "asset resumed at the wrong byte";
+      http.end();
+      return false;
+    }
   }
   return true;
 }
@@ -452,23 +474,17 @@ bool ghInstall(const String &tag) {
 
   AssetSource src;
   if (!resolveAsset(rels[idx].binId, src)) return false;
-  logInfo("Downloading image (free heap %u)", (unsigned)ESP.getFreeHeap());
-  WiFiClientSecure client;
-  HTTPClient http;
-  if (!openAsset(src, client, http)) return false;
-  int total = http.getSize();
-  if (total <= 0) total = (int)rels[idx].binSize;
+  int total = (int)rels[idx].binSize;
   if (total <= 0) {
     lastError = "unknown image size";
-    http.end();
     return false;
   }
   if (!Update.begin(total)) {
     lastError = "no room in the idle slot";
-    http.end();
     return false;
   }
 
+  logInfo("Downloading image (free heap %u)", (unsigned)ESP.getFreeHeap());
   logInfo("Installing %s (%d bytes) from %s", tag.c_str(), total, repoName().c_str());
   String status = String("Installing ") + tag;
   otaReport(true, 0, status.c_str());
@@ -477,34 +493,79 @@ bool ghInstall(const String &tag) {
   mbedtls_sha256_init(&sha);
   mbedtls_sha256_starts(&sha, 0);  // 0 = SHA-256, not SHA-224
 
-  WiFiClient *stream = http.getStreamPtr();
   uint8_t buf[1024];
   int written = 0, lastPct = -1;
-  unsigned long lastData = millis();
-  while (written < total) {
-    int avail = stream->available();
-    if (avail <= 0) {
-      if (!stream->connected() || millis() - lastData > 15000) break;
-      delay(1);
-      continue;
+  static const int MAX_DOWNLOAD_ATTEMPTS = 3;
+  for (int attempt = 0; attempt < MAX_DOWNLOAD_ATTEMPTS && written < total; attempt++) {
+    if (attempt) {
+      logWarn("Image download interrupted at %d/%d; resume attempt %d/%d", written, total,
+              attempt + 1, MAX_DOWNLOAD_ATTEMPTS);
+      String resumeStatus = String("Resuming ") + tag;
+      otaReport(true, (int)((int64_t)written * 100 / total), resumeStatus.c_str());
+      wifiEnsureConnected();
+      delay(250);
     }
-    int want = avail > (int)sizeof(buf) ? (int)sizeof(buf) : avail;
-    int n = stream->readBytes(buf, want);
-    if (n <= 0) continue;
-    lastData = millis();
-    if ((int)Update.write(buf, n) != n) {
-      lastError = "flash write failed";
+
+    WiFiClientSecure client;
+    HTTPClient http;
+    if (!wifiConnected() || !openAsset(src, client, http, (uint32_t)written)) {
+      if (attempt + 1 < MAX_DOWNLOAD_ATTEMPTS) {
+        lastError = "";  // a later range request may recover a transient failure
+        continue;
+      }
       break;
     }
-    mbedtls_sha256_update(&sha, buf, n);
-    written += n;
-    int pct = (int)((int64_t)written * 100 / total);
-    if (pct >= lastPct + 5) {
-      lastPct = pct;
-      otaReport(true, pct, status.c_str());
+
+    int responseSize = http.getSize();
+    int remaining = total - written;
+    if (responseSize > 0 && responseSize != remaining) {
+      lastError = "asset size changed (" + String(responseSize) + "/" + String(remaining) + ")";
+      http.end();
+      break;
     }
+
+    WiFiClient *connection = http.getStreamPtr();
+    if (!connection) {
+      lastError = "asset stream unavailable";
+      http.end();
+      break;
+    }
+    bool chunked = http.header("Transfer-Encoding").equalsIgnoreCase("chunked");
+    HttpChunkDecodingStream decoded(*connection);
+    Stream &stream = chunked ? static_cast<Stream &>(decoded)
+                             : static_cast<Stream &>(*connection);
+    stream.setTimeout(30000);
+    unsigned long lastData = millis();
+    while (written < total) {
+      int avail = stream.available();
+      if (avail <= 0) {
+        if ((chunked && (decoded.decodeFinished() || decoded.decodeFailed())) ||
+            !connection->connected() || millis() - lastData > 30000)
+          break;
+        delay(1);
+        continue;
+      }
+      int want = avail > (int)sizeof(buf) ? (int)sizeof(buf) : avail;
+      if (want > total - written) want = total - written;
+      int n = stream.readBytes(buf, want);
+      if (n <= 0) continue;
+      lastData = millis();
+      if ((int)Update.write(buf, n) != n) {
+        lastError = "flash write failed";
+        break;
+      }
+      mbedtls_sha256_update(&sha, buf, n);
+      written += n;
+      int pct = (int)((int64_t)written * 100 / total);
+      if (pct >= lastPct + 5) {
+        lastPct = pct;
+        otaReport(true, pct, status.c_str());
+      }
+    }
+    if (chunked && decoded.decodeFailed()) lastError = "invalid HTTP chunks in image";
+    http.end();
+    if (lastError.length()) break;
   }
-  http.end();
 
   uint8_t digest[32];
   mbedtls_sha256_finish(&sha, digest);
