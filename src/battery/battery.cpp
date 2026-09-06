@@ -9,7 +9,15 @@
 // the ~1.4 V seen at the pin (4.2 V / 3) stay inside the ADC's full-scale range.
 static const int BAT_ADC_PIN = 4;
 static const float BAT_DIVIDER = 3.0f;
-static const int BAT_SAMPLES = 16;  // average to suppress ADC noise
+// This board's high-impedance divider occasionally yields a failed zero-valued
+// conversion. Averaging those failures is actively harmful: one good 4.14 V
+// sample plus fifteen zeroes becomes a believable-looking but false 0.26 V.
+// Gather a small set of plausible conversions instead and use their median.
+static const int BAT_TARGET_SAMPLES = 7;
+static const int BAT_READ_ATTEMPTS = 64;
+static const uint32_t BAT_PIN_MIN_MV = 800;   // 2.4 V at the cell, below its cutoff
+static const uint32_t BAT_PIN_MAX_MV = 1800;  // 5.4 V at the cell, above charger output
+static const int BAT_BAD_BATCH_LIMIT = 6;    // keep the last good value for one minute
 
 // Charging is inferred from the terminal voltage (no status pin exists). On
 // battery the loaded terminal tops out near 4.05 V; a charger drives it up to
@@ -31,6 +39,7 @@ static float voltage = NAN;  // live measured terminal voltage (raw)
 static float vFilt = NAN;    // smoothed voltage the percentage is derived from
 static int percent = -1;     // runtime remaining; held while charging
 static bool charging = false;
+static int badBatches = 0;
 
 // Voltage -> charge curve, FITTED from a measured full discharge of this
 // device's own cells (2026-08-27, 4.00 V down to cutoff at 2.89 V over 17.6 h,
@@ -86,10 +95,39 @@ static int voltageToPercent(float v) {
 
 void batteryUpdate() {
   // analogReadMilliVolts() applies the per-chip ADC calibration, so we get
-  // millivolts at the pin directly rather than raw counts.
-  uint32_t accum = 0;
-  for (int i = 0; i < BAT_SAMPLES; i++) accum += analogReadMilliVolts(BAT_ADC_PIN);
-  float pinV = (accum / (float)BAT_SAMPLES) / 1000.0f;
+  // millivolts at the pin directly rather than raw counts. Failed conversions
+  // return zero in Arduino-ESP32, so reject anything outside the electrically
+  // possible battery range rather than folding it into an average.
+  uint16_t good[BAT_TARGET_SAMPLES];
+  int goodCount = 0;
+  for (int i = 0; i < BAT_READ_ATTEMPTS && goodCount < BAT_TARGET_SAMPLES; i++) {
+    uint32_t mv = analogReadMilliVolts(BAT_ADC_PIN);
+    if (mv >= BAT_PIN_MIN_MV && mv <= BAT_PIN_MAX_MV) good[goodCount++] = (uint16_t)mv;
+    delayMicroseconds(200);  // let the divider and ADC sample capacitor settle
+  }
+  if (goodCount == 0) {
+    // A short run of ADC failures must not turn a healthy cell into 0%. If the
+    // signal stays absent for a full minute, expose it as unavailable instead
+    // of retaining a stale battery reading forever (e.g. after battery removal).
+    if (++badBatches >= BAT_BAD_BATCH_LIMIT) {
+      voltage = NAN;
+      vFilt = NAN;
+      percent = -1;
+      charging = false;
+    }
+    return;
+  }
+  badBatches = 0;
+  for (int i = 1; i < goodCount; i++) {
+    uint16_t v = good[i];
+    int j = i;
+    while (j > 0 && good[j - 1] > v) {
+      good[j] = good[j - 1];
+      j--;
+    }
+    good[j] = v;
+  }
+  float pinV = good[goodCount / 2] / 1000.0f;
   voltage = pinV * BAT_DIVIDER;
   vFilt = isnan(vFilt) ? voltage : vFilt + V_FILT_ALPHA * (voltage - vFilt);
 

@@ -688,25 +688,28 @@ static void handleRoot() {
           "document.getElementById('busy').classList.remove('d-none');}"
           "function busyOff(){document.getElementById('busy').classList.add('d-none');}"
           // A firmware install reboots the device mid-request, so the POST never
-          // answers and the browser sits on it instead of failing fast. Fire it
-          // and forget, then poll until the device serves pages again and reload
-          // into the new build. A failed install *does* answer -- that resolves
-          // first, cancels the poll, and shows the reason.
+          // answers successfully. Do not poll while that POST is still pending:
+          // the synchronous installer cannot serve those requests, and queued
+          // TCP connections compete with the GitHub TLS download. Start polling
+          // only once the POST disconnects, with a long fallback for browsers
+          // that do not notice the reboot promptly. A failed install *does*
+          // answer, so that path shows the reason without polling.
           "function installFirmware(body){"
           "busyOn('Installing firmware\u2026 the device will reboot');"
-          "var done=false;"
-          "fetch('/firmware',{method:'POST',headers:{'X-Requested-With':'fetch'},body:body})"
-          ".then(async function(r){var d={ok:false,msg:''};try{d=await r.json();}catch(e){}"
-          "done=true;busyOff();if(d.msg)showToast(!!d.ok,d.msg);await reloadApp();})"
-          ".catch(function(){});"
-          "var tries=0;"
-          "var iv=setInterval(function(){"
+          "var done=false,iv=0;"
+          "function startPoll(){if(done||iv)return;var tries=0;"
+          "iv=setInterval(function(){"
           "if(done){clearInterval(iv);return;}"
           "if(++tries>60){clearInterval(iv);busyOff();"
           "showToast(false,'Device has not come back \u2014 check its screen');return;}"
           "fetch('/?ping='+tries,{cache:'no-store'}).then(function(r){"
           "if(r.ok&&!done){clearInterval(iv);location.reload();}}).catch(function(){});"
           "},3000);}"
+          "fetch('/firmware',{method:'POST',headers:{'X-Requested-With':'fetch'},body:body})"
+          ".then(async function(r){var d={ok:false,msg:''};try{d=await r.json();}catch(e){}"
+          "done=true;busyOff();if(d.msg)showToast(!!d.ok,d.msg);await reloadApp();})"
+          ".catch(function(){startPoll();});"
+          "setTimeout(startPoll,180000);}"
           // Point the Claude card's Save button at whichever tab's form is active.
           // Delegated on document so it survives the #app swap after each save.
           "document.addEventListener('shown.bs.tab',function(ev){"

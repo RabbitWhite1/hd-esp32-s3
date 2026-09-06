@@ -23,6 +23,8 @@ static const char *BIN_NAME = "hd-esp32-s3.ino.bin";
 // 100; 64 keeps the dropdown and the filtered parse bounded while going far
 // enough back that an older build is still reachable.
 static const int MAX_RELEASES = 64;
+static const int MAX_DOWNLOAD_ATTEMPTS = 8;
+static const unsigned long DOWNLOAD_IDLE_MS = 8000;
 struct Release {
   String tag;
   uint32_t binId = 0;   // asset ids, not URLs: the asset endpoint is the one path
@@ -409,7 +411,7 @@ static bool openAsset(const AssetSource &src, WiFiClientSecure &client, HTTPClie
     lastError = "connection failed";
     return false;
   }
-  http.setTimeout(30000);
+  http.setTimeout(DOWNLOAD_IDLE_MS);
   const char *responseHeaders[] = {"Content-Range", "Transfer-Encoding"};
   http.collectHeaders(responseHeaders, 2);
   if (src.needAuth) addGhHeaders(http, "application/octet-stream");
@@ -495,7 +497,6 @@ bool ghInstall(const String &tag) {
 
   uint8_t buf[1024];
   int written = 0, lastPct = -1;
-  static const int MAX_DOWNLOAD_ATTEMPTS = 3;
   for (int attempt = 0; attempt < MAX_DOWNLOAD_ATTEMPTS && written < total; attempt++) {
     if (attempt) {
       logWarn("Image download interrupted at %d/%d; resume attempt %d/%d", written, total,
@@ -534,13 +535,13 @@ bool ghInstall(const String &tag) {
     HttpChunkDecodingStream decoded(*connection);
     Stream &stream = chunked ? static_cast<Stream &>(decoded)
                              : static_cast<Stream &>(*connection);
-    stream.setTimeout(30000);
+    stream.setTimeout(DOWNLOAD_IDLE_MS);
     unsigned long lastData = millis();
     while (written < total) {
       int avail = stream.available();
       if (avail <= 0) {
         if ((chunked && (decoded.decodeFinished() || decoded.decodeFailed())) ||
-            !connection->connected() || millis() - lastData > 30000)
+            !connection->connected() || millis() - lastData > DOWNLOAD_IDLE_MS)
           break;
         delay(1);
         continue;
