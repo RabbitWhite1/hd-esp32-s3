@@ -107,10 +107,11 @@ void wifiStartSetupAP() {
 static void stopSetupAP() {
   if (!apMode) return;
   dnsServer.stop();
-  WiFi.softAPdisconnect(true);  // stop broadcasting + free the AP
+  WiFi.softAPdisconnect(false);  // disable only the AP; preserve the established STA link
   WiFi.mode(WIFI_STA);
   apMode = false;
   apStopAt = 0;
+  statusMsg = "";  // remove the stale setup instructions from the LCD footer
   logInfo("WiFi setup AP stopped (joined a network)");
 }
 
@@ -120,6 +121,17 @@ void wifiRequestStopAP(uint32_t delayMs) {
 
 void wifiLoop() {
   if (apMode) dnsServer.processNextRequest();  // answer captive-portal lookups
+  // A station join can complete after wifiBegin() has timed out and brought up
+  // the fallback AP: the ESP Wi-Fi driver keeps the STA attempt alive in
+  // WIFI_AP_STA mode. In that path nobody explicitly schedules the AP teardown,
+  // and wifiEnsureConnected() simply returns once it sees WL_CONNECTED. Enforce
+  // the invariant here that setup mode ends after any successful station join.
+  // Keep the usual grace period so a portal submission can flush its response.
+  if (apMode && !apStopAt && WiFi.status() == WL_CONNECTED) {
+    currentSsid = WiFi.SSID();
+    wifiRequestStopAP(3000);
+    logInfo("WiFi joined %s while setup AP was active; stopping AP shortly", currentSsid.c_str());
+  }
   // Deferred AP teardown: once we've joined a real network we keep the AP up for
   // a short grace period so the setup page's "Connected" reply can reach the phone.
   if (apStopAt && (int32_t)(millis() - apStopAt) >= 0) {

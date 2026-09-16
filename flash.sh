@@ -5,6 +5,7 @@
 # Build the sketch and push it to the device in one step.
 #
 #   ./flash.sh                 build, then upload over the air to esp32.local
+#   ./flash.sh esp32h.local    build, then upload over the air to that hostname
 #   ./flash.sh /dev/ttyACM0    build, then upload over USB (needed for the first
 #                              flash, since OTA only exists once it is running)
 #
@@ -27,7 +28,10 @@ run() { printf '+ %s\n' "$*" >&2; "$@"; }
 run arduino-cli compile --fqbn "$FQBN" --build-path "$BUILD_DIR" \
     ${VERBOSE:+-v} "$SKETCH_DIR"
 
-if [ $# -gt 0 ]; then
+OTA_TARGET="${OTA_HOST:-esp32.local}"
+if [ $# -gt 0 ] && [[ "$1" == *.local && "$1" != /dev/* ]]; then
+  OTA_TARGET="$1"
+elif [ $# -gt 0 ]; then
   run arduino-cli upload --fqbn "$FQBN" -p "$1" --input-dir "$BUILD_DIR" "$SKETCH_DIR"
   exit
 fi
@@ -37,6 +41,6 @@ fi
 # which fails outright ("port not found") whenever the device isn't advertising
 # _arduino._tcp at that moment. espota just needs the address.
 ESPOTA="$(ls -1 "$HOME"/.arduino15/packages/esp32/hardware/esp32/*/tools/espota.py | tail -1)"
-set -- -r -i "${OTA_HOST:-esp32.local}" -p 3232 -f "$BIN"
+set -- -r -i "$OTA_TARGET" -p 3232 -f "$BIN"
 [ -n "${OTA_PASS:-}" ] && set -- "$@" -a "$OTA_PASS"
 run python3 "$ESPOTA" "$@"
