@@ -5,9 +5,10 @@
 #include <Arduino.h>
 #include <time.h>
 
-// Claude usage backend: fetches the organization usage summary from claude.ai
-// over HTTPS and caches the two headline utilization figures. The org id and
-// session cookie are set at runtime (e.g. from the web UI), not hardcoded.
+// Claude usage backend: fetches organization usage summaries from claude.ai
+// over HTTPS and caches the two headline utilization figures for each configured
+// account. Every account has a user-facing alias; session cookies are runtime
+// settings (e.g. from the web UI), never hardcoded.
 // Split so the network half can run on the background fetch task while the
 // values the renderer reads are only ever written by the loop task:
 // claudeUsageFetch() stages a result, claudeUsageCommit() promotes it. Neither
@@ -15,25 +16,32 @@
 void claudeUsageFetch();    // fetch + parse into a staging slot (call when Wi-Fi is up)
 bool claudeUsageCommit();   // loop task: promote a staged result; true if it did
 void claudeUsageUpdate();   // Fetch + Commit, for callers already on the loop task
-bool claudeUsageOk();       // true if the most recent fetch succeeded
-float claudeFiveHour();     // 5-hour-window utilization, percent (NAN if unknown)
-float claudeSevenDay();     // 7-day-window utilization, percent (NAN if unknown)
-time_t claudeUsageAsOf();   // wall-clock time of the last successful fetch (0 = never)
 
-// Credentials (held in RAM; cleared on reboot).
-void claudeUsageSetOrgId(const String &orgId);
-void claudeUsageSetSessionKey(const String &key);  // pass "" to keep the current key
-// Parse a whole browser "Cookie:" header string: pulls out the sessionKey value
-// (and the org id from lastActiveOrg, if present). Returns true if a session key
-// was found. Convenience for pasting the full cookie instead of the two fields.
-bool claudeUsageSetFromCookie(const String &cookie);
+// Per-account results. The LCD displays the first (pinned) account; the web UI
+// lists every account. No API exposes a key.
+int claudeUsageAccountCount();
+int claudeUsageMaxAccounts();
+int claudeUsageDisplayIndex();  // pinned index 0, or -1 when nothing is configured
+const String &claudeUsageAlias(int idx);
+bool claudeUsageOk(int idx);
+float claudeFiveHour(int idx);
+float claudeSevenDay(int idx);
+time_t claudeUsageAsOf(int idx);
 
-// Persistence of the org id + session key in the shared config (esp32.json).
-void claudeUsageLoad();  // restore org id + key from config (call after configBegin)
-bool claudeUsageSave();  // write the current org id + key to config + persist; false on write failure
-const String &claudeUsageOrgId();
-const String &claudeUsageSessionKey();  // current session key ("" if unset)
-bool claudeUsageHasKey();  // true once a non-empty session key has been set
+// Add or update an account. Alias is required and unique (case-insensitive).
+// Blank org/key fields preserve those values on an existing alias, but a new
+// account requires both. The cookie form extracts sessionKey and lastActiveOrg.
+bool claudeUsageSetAccount(const String &alias, const String &orgId,
+                           const String &key, String &errorOut);
+bool claudeUsageSetFromCookie(const String &alias, const String &cookie,
+                              String &errorOut);
+bool claudeUsageRename(int idx, const String &alias, String &errorOut);
+bool claudeUsageMoveToTop(int idx, String &errorOut);  // pin this account for LCD display
+
+// Persistence in esp32.json. Legacy claude_org/claude_key values are migrated
+// to a claude_accounts entry named "default" and removed on the next save.
+void claudeUsageLoad();
+bool claudeUsageSave();
 
 // Auto-refresh interval, in minutes (backed by the shared esp32.json store).
 int claudeUsageIntervalMin();             // configured interval (>= 1; default 30)

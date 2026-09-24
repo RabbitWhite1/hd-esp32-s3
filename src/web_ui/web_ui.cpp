@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Zhanghan Wang
 
 #include "web_ui.h"
-#include "../claude_usage/claude_usage.h"  // configure org id + session key from the web form
+#include "../claude_usage/claude_usage.h"  // configure aliased Claude accounts from the web form
 #include "../codex_usage/codex_usage.h"    // receive the relayed Codex access token
 #include "../sensors/sensors.h"            // live temp/humidity shown on the page
 #include "../wifi_net/wifi_net.h"          // add/list saved Wi-Fi networks from the form
@@ -152,6 +152,80 @@ static String jsScript(const char *route, const char *glob) {
          "\"><\\/script>')</script>";
 }
 
+// Stream the main page in bounded chunks instead of assembling one large
+// Arduino String. After Wi-Fi and TLS have fragmented the heap, growing the old
+// 20+ KB String could fail silently: the browser received the early Dashboard
+// markup but not the closing scripts, leaving blank dates and empty charts.
+// Keeping one small reusable buffer makes the largest allocation independent of
+// page size, configured-list lengths, and future UI additions.
+class ChunkedHtml {
+ public:
+  explicit ChunkedHtml(WebServer &server) : server(server) {
+    buffer.reserve(CHUNK_SIZE);
+    server.sendHeader("Cache-Control", "no-store");
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+  }
+
+  ChunkedHtml &operator+=(const String &value) {
+    append(value.c_str(), value.length());
+    return *this;
+  }
+  ChunkedHtml &operator+=(const char *value) {
+    append(value, value ? strlen(value) : 0);
+    return *this;
+  }
+  ChunkedHtml &operator+=(char value) {
+    append(&value, 1);
+    return *this;
+  }
+  ChunkedHtml &operator+=(int value) { return *this += String(value); }
+  ChunkedHtml &operator+=(unsigned int value) { return *this += String(value); }
+  ChunkedHtml &operator+=(long value) { return *this += String(value); }
+  ChunkedHtml &operator+=(unsigned long value) { return *this += String(value); }
+
+  void finish() {
+    flush();
+    server.sendContent("");  // zero-length chunk terminates the response
+  }
+
+ private:
+  static const size_t CHUNK_SIZE = 1024;
+  WebServer &server;
+  String buffer;
+
+  void append(const char *data, size_t length) {
+    while (length > 0) {
+      size_t room = CHUNK_SIZE - buffer.length();
+      if (room == 0) {
+        flush();
+        room = CHUNK_SIZE;
+      }
+      size_t take = length < room ? length : room;
+      if (!buffer.concat(data, (unsigned int)take)) {
+        // A 1 KB allocation should remain available even under TLS pressure.
+        // If it does not, flush and write this append directly from its existing
+        // storage. This preserves a complete response even at critically low
+        // heap instead of recreating the old silent truncation.
+        flush();
+        logError("Web UI HTML chunk allocation failed (%u bytes free, %u largest)",
+                 (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+        server.sendContent(data, length);
+        return;
+      }
+      data += take;
+      length -= take;
+      if (buffer.length() == CHUNK_SIZE) flush();
+    }
+  }
+
+  void flush() {
+    if (buffer.length() == 0) return;
+    server.sendContent(buffer);
+    buffer.remove(0);  // retain the allocation for the next chunk
+  }
+};
+
 // Minimal, dependency-free page served at "/" while the device is in SoftAP
 // setup mode (no saved network reachable, so no internet to load Bootstrap). A
 // phone joins the open setup AP, picks a scanned network (or types one), enters
@@ -198,8 +272,17 @@ static void handleRoot() {
     handleSetup();
     return;
   }
-  String html =
-    "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+
+  // Refresh the release list before starting the HTTP response. This is the
+  // page's only possible TLS call and cannot safely overlap an open response on
+  // the same small heap.
+  {
+    NetGuard net(0);
+    ghRefreshIfStale(300);
+  }
+
+  ChunkedHtml html(server);
+  html += "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>hd panel</title>"
     "<link rel='icon' type='image/x-icon' href='/favicon.ico'>";
@@ -218,15 +301,6 @@ static void handleRoot() {
   // Firmware picker, right-aligned on the title row: running version, the
   // releases CI published, and Install. Each page load re-lists if the cache has
   // gone stale, so the dropdown tracks GitHub on its own; the arrow forces it.
-  // These are the only TLS calls left on the loop task, so they take the network
-  // lock the interactive way -- waiting for the radio rather than giving up --
-  // and the background fetch task yields to them. Without this, a page load and
-  // a periodic feed could hold two WiFiClientSecure contexts at once, which is
-  // what starved the heap in 5da1af8.
-  {
-    NetGuard net(0);
-    ghRefreshIfStale(300);
-  }
   html += "<form method='post' action='/firmware' class='d-flex align-items-center gap-2'>"
           "<span class='text-muted small text-nowrap'>fw <code>";
   html += FW_VERSION;
@@ -465,11 +539,46 @@ static void handleRoot() {
   html += cardClose;
 
   // Claude usage credentials (kept in RAM on the device, never in the firmware).
-  // Two ways to set them, in tabs; the header Save button submits the active
-  // tab's form (default: the cookie paste). The how-to sits outside the tabs so
-  // it's shown for both.
+  // Accounts are identified only by aliases in this page: stored session keys
+  // are deliberately never rendered back into HTML.
   html += cardOpen("claude", "Claude usage",
-                   "<button id='claudesave' class='btn btn-sm btn-primary' form='claudeform_cookie'>Save</button>");
+                   "<button id='claudesave' class='btn btn-sm btn-primary' form='claudeform_cookie'>Add / update</button>");
+  html += "<div class='text-muted small mb-2'>Stored aliases &mdash; the top account is displayed on the LCD</div>"
+          "<ul class='list-group mb-3'>";
+  if (claudeUsageAccountCount() == 0)
+    html += "<li class='list-group-item text-muted'>(none)</li>";
+  for (int i = 0; i < claudeUsageAccountCount(); i++) {
+    html += "<li class='list-group-item'><form action='/clauderename' method='POST' "
+            "class='d-flex align-items-center gap-2 m-0'>"
+            "<input type='hidden' name='idx' value='";
+    html += i;
+    html += "'><input type='text' name='alias' class='form-control form-control-sm border-0 px-0' "
+            "readonly required maxlength='24' value='";
+    html += htmlEscape(claudeUsageAlias(i));
+    html += "'>";
+    if (i == 0) html += "<span class='badge text-bg-primary'>displayed</span>";
+    html += "<span class='text-muted small text-nowrap'>";
+    if (claudeUsageOk(i)) {
+      html += "5h ";
+      html += String(claudeFiveHour(i), 0);
+      html += "% &middot; 7d ";
+      html += String(claudeSevenDay(i), 0);
+      html += "%";
+    } else {
+      html += "usage unavailable";
+    }
+    html += "</span><button type='button' class='btn btn-sm btn-outline-secondary' "
+            "onclick='editClaudeAlias(this)' title='Edit alias' aria-label='Edit alias'>&#x270E;</button>"
+            "<button class='btn btn-sm btn-outline-secondary' name='act' value='top' "
+            "title='Pin for LCD display' aria-label='Pin for LCD display'";
+    if (i == 0) html += " disabled";
+    html += ">&#x2912;</button>"
+            "</form></li>";
+  }
+  html += "</ul>";
+  html += "<div class='form-text mb-3'>Use a new alias to add an account, or reuse an alias to "
+          "replace its credentials. Stored session keys are never sent back to this page.</div>";
+
   html += "<ul class='nav nav-tabs mb-3' role='tablist'>"
           "<li class='nav-item'><button class='nav-link active' type='button' role='tab' "
           "data-bs-toggle='tab' data-bs-target='#claude-cookie' data-form='claudeform_cookie'>Cookie</button></li>"
@@ -481,6 +590,9 @@ static void handleRoot() {
   // out sessionKey (and the org id from lastActiveOrg).
   html += "<div class='tab-pane fade show active' id='claude-cookie' role='tabpanel'>"
           "<form id='claudeform_cookie' action='/claude' method='POST'>"
+          "<label class='form-label'>Alias</label>"
+          "<input type='text' class='form-control mb-3' name='alias' required maxlength='24' "
+          "placeholder='e.g. personal'>"
           "<label class='form-label'>Paste full cookie</label>"
           "<textarea class='form-control' name='cookie' rows='4' "
           "placeholder='anthropic-device-id=...; sessionKey=sk-ant-...; lastActiveOrg=...; ...'></textarea>"
@@ -488,18 +600,19 @@ static void handleRoot() {
           "<code>lastActiveOrg</code>).</div></form></div>";
 
   // Org ID + session key tab. The stored session key is NEVER written into the
-  // page, so anyone on the LAN can't read it from the source; leave the key field
-  // blank to keep the current one.
+  // page. Reusing an alias updates that account; blank org/key fields preserve
+  // their stored values.
   html += "<div class='tab-pane fade' id='claude-fields' role='tabpanel'>"
           "<form id='claudeform_fields' action='/claude' method='POST'>"
+          "<label class='form-label'>Alias</label>"
+          "<input type='text' class='form-control mb-3' name='alias' required maxlength='24' "
+          "placeholder='e.g. personal'>"
           "<label class='form-label'>Org ID</label>"
-          "<input type='text' class='form-control mb-3' name='org' value='";
-  html += htmlEscape(claudeUsageOrgId());
-  html += "'><label class='form-label'>Session key ";
-  html += claudeUsageHasKey() ? "<span class='badge text-bg-success'>set</span>"
-                              : "<span class='badge text-bg-secondary'>not set</span>";
-  html += "</label><input type='text' class='form-control' name='key' "
-          "placeholder='leave blank to keep current'></form></div>";
+          "<input type='text' class='form-control mb-3' name='org' "
+          "placeholder='required for a new alias; blank keeps stored value'>"
+          "<label class='form-label'>Session key</label>"
+          "<input type='password' class='form-control' name='key' autocomplete='new-password' "
+          "placeholder='required for a new alias; blank keeps stored key'></form></div>";
 
   html += "</div>";  // /tab-content
 
@@ -715,6 +828,12 @@ static void handleRoot() {
           "document.addEventListener('shown.bs.tab',function(ev){"
           "var fm=ev.target.getAttribute('data-form');if(!fm)return;"
           "var sb=document.getElementById('claudesave');if(sb)sb.setAttribute('form',fm);});"
+          // First pencil click unlocks the alias field; the second submits the
+          // rename form through the page's normal AJAX handler.
+          "function editClaudeAlias(b){var i=b.form.querySelector('input[name=alias]');"
+          "if(i.readOnly){i.readOnly=false;i.classList.remove('border-0');i.focus();i.select();"
+          "b.innerHTML='Save';b.setAttribute('aria-label','Save alias');return;}"
+          "if(b.form.requestSubmit)b.form.requestSubmit();else b.form.submit();}"
           "function showToast(ok,msg){var c=document.getElementById('toasts');"
           "var d=document.createElement('div');"
           "d.className='toast align-items-center border-0 text-bg-'+(ok?'success':'danger');"
@@ -867,7 +986,7 @@ static void handleRoot() {
           // Keep the chart live; the interval persists across #app swaps.
           "if(!window._thi){window._thi=setInterval(drawChart,60000);}"
           "</script></body></html>";
-  server.send(200, "text/html", html);
+  html.finish();
 }
 
 static void handleWifi() {
@@ -990,26 +1109,53 @@ static void handleWifiSave() {
 // city arrays, and also serialises any TLS request the handler performs itself.
 static void handleClaude() {
   NetGuard net(0);
+  claudeUsageCommit();  // free an already-fetched batch before changing aliases
+  String alias = server.hasArg("alias") ? server.arg("alias") : String("");
+  String error;
   // A pasted full cookie takes priority over the individual org/key fields.
   String cookie = server.hasArg("cookie") ? server.arg("cookie") : String("");
   cookie.trim();
   if (cookie.length() > 0) {
-    if (!claudeUsageSetFromCookie(cookie)) {
-      respond(false, "No sessionKey found in the pasted cookie");
+    if (!claudeUsageSetFromCookie(alias, cookie, error)) {
+      respond(false, error);
       return;
     }
-    bool saved = claudeUsageSave();  // persist the new org id + key to config
-    logInfo("Claude credentials updated from pasted cookie via web UI");
-    claudeUsageUpdate();
-    respond(saved, saved ? "Claude credentials saved from cookie" : "Save failed (SD card?)");
+    bool saved = claudeUsageSave();
+    logInfo("Claude account updated from pasted cookie via web UI");
+    if (saved) claudeUsageUpdate();
+    respond(saved, saved ? "Claude account saved from cookie" : "Save failed (SD card?)");
     return;
   }
-  if (server.hasArg("org")) claudeUsageSetOrgId(server.arg("org"));
-  if (server.hasArg("key")) claudeUsageSetSessionKey(server.arg("key"));  // empty -> keep current
-  bool saved = claudeUsageSave();  // persist the new org id + key to config
-  logInfo("Claude credentials updated via web UI");
-  claudeUsageUpdate();  // refresh now so the result shows on the LCD immediately
-  respond(saved, saved ? "Claude credentials saved" : "Save failed (SD card?)");
+  String org = server.hasArg("org") ? server.arg("org") : String("");
+  String key = server.hasArg("key") ? server.arg("key") : String("");
+  if (!claudeUsageSetAccount(alias, org, key, error)) {
+    respond(false, error);
+    return;
+  }
+  bool saved = claudeUsageSave();
+  logInfo("Claude account updated via web UI");
+  if (saved) claudeUsageUpdate();  // show the new/updated account immediately
+  respond(saved, saved ? "Claude account saved" : "Save failed (SD card?)");
+}
+
+static void handleClaudeRename() {
+  NetGuard net(0);
+  claudeUsageCommit();
+  int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
+  String alias = server.hasArg("alias") ? server.arg("alias") : String("");
+  String act = server.hasArg("act") ? server.arg("act") : String("");
+  String error;
+  bool pin = act == "top";
+  bool changed = pin ? claudeUsageMoveToTop(idx, error)
+                     : claudeUsageRename(idx, alias, error);
+  if (!changed) {
+    respond(false, error);
+    return;
+  }
+  bool saved = claudeUsageSave();
+  logInfo("Claude account %s via web UI (idx=%d)", pin ? "pinned" : "alias renamed", idx);
+  respond(saved, saved ? (pin ? "Claude account pinned for display" : "Claude alias saved")
+                       : "Save failed (SD card?)");
 }
 
 // Firmware picker on the title row. "refresh" re-lists what CI published;
@@ -1438,6 +1584,7 @@ void webBegin() {
   server.on("/history", HTTP_GET, handleHistory);  // recent samples for the NOW charts
   server.on("/save", HTTP_POST, handleSave);
   server.on("/claude", HTTP_POST, handleClaude);
+  server.on("/clauderename", HTTP_POST, handleClaudeRename);
   server.on("/codex", HTTP_POST, handleCodex);            // token pasted into the web form
   server.on("/codextoken", HTTP_POST, handleCodexToken);  // token relayed by the cron one-liner
   server.on("/firmware", HTTP_POST, handleFirmware);

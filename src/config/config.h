@@ -8,7 +8,7 @@
 // Shared persistent settings store backed by a single JSON file
 // (/sdcard/esp32.json), managed with ArduinoJson. It holds runtime settings that
 // don't each warrant their own file (refresh intervals, time-zone selection,
-// Claude credentials, the weather-city list, ...). Load once at boot with
+// aliased Claude accounts, the weather-city list, ...). Load once at boot with
 // configBegin(); get/set operate on an in-RAM JsonDocument and only touch the
 // card on configSave(). Feature modules own their own key names + defaults.
 void configBegin();      // load the store from SD (call after sdBegin)

@@ -13,7 +13,7 @@
 #include "src/sensors/sensors.h"             // sensorsBegin / sensorsPresent / sensorsRead
 #include "src/battery/battery.h"             // batteryBegin / batteryUpdate / batteryPercent
 #include "src/web_ui/web_ui.h"               // webBegin / webHandle / webTodo*
-#include "src/claude_usage/claude_usage.h"   // claudeUsageUpdate / claudeFiveHour / claudeSevenDay
+#include "src/claude_usage/claude_usage.h"   // aliased Claude accounts + usage fetch/results
 #include "src/claude_usage/clawd_icon.h"      // clawd_icon_bits — mascot drawn left of the usage gauges
 #include "src/codex_usage/codex_usage.h"    // codexUsageUpdate / codexPrimaryPercent — Codex (ChatGPT) limits
 #include "src/codex_usage/codex_icon.h"     // codex_icon_bits — OpenAI mark drawn left of the Codex gauges
@@ -398,10 +398,20 @@ void drawOverview(int mx, int lineW) {
   const int gaugeX = mx + iconSlotW + iconGap;
   const int gaugeW = halfW - (iconSlotW + iconGap);
 
-  drawUsageHeading(mx, 184, "Claude Usage", claudeUsageAsOf());
+  // The first (web-pinned) Claude account supplies the LCD gauges. Its alias in
+  // the heading identifies which stored key the pair belongs to without ever
+  // exposing the key itself. The mascot already identifies the service, so the
+  // multi-account title is just the alias and still leaves room for the timestamp.
+  int claudeIdx = claudeUsageDisplayIndex();
+  char claudeTitle[24];
+  if (claudeIdx >= 0 && claudeUsageAccountCount() > 1)
+    snprintf(claudeTitle, sizeof(claudeTitle), "%.12s", claudeUsageAlias(claudeIdx).c_str());
+  else
+    snprintf(claudeTitle, sizeof(claudeTitle), "Claude Usage");
+  drawUsageHeading(mx, 184, claudeTitle, claudeUsageAsOf(claudeIdx));
   u8g2->drawXBMP(mx, 202 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
-  drawUsageBar(gaugeX, 190, gaugeW, "5h", claudeFiveHour());
-  drawUsageBar(gaugeX, 206, gaugeW, "7d", claudeSevenDay());
+  drawUsageBar(gaugeX, 190, gaugeW, "5h", claudeFiveHour(claudeIdx));
+  drawUsageBar(gaugeX, 206, gaugeW, "7d", claudeSevenDay(claudeIdx));
 
   // Codex reports its windows generically (their lengths vary by plan, and Plus
   // has no secondary one), so the labels come from the reported window lengths;
@@ -651,7 +661,7 @@ void setup() {
   // ===========================================================================
 
   // Settings that come from config (esp32.json) need configBegin() first (done above).
-  claudeUsageLoad();  // restore the Claude org id + session key from config
+  claudeUsageLoad();  // restore aliased Claude accounts from config
   codexUsageLoad();   // restore the relayed Codex access token from config
   wifiLoadHostname();  // restore the mDNS label before the first connection advertises it
   wifiLoadNetworks();

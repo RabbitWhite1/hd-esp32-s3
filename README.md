@@ -49,7 +49,9 @@ button plays the refresh sounds.
 - **Weather:** add cities by name. The first two in the saved order appear on the LCD.
 - **Google Doc:** provide a normal Docs link and share the document as “Anyone with the link.” New or
   edited lines appear in an on-screen popup.
-- **Claude usage:** paste the browser cookie, or enter the organization ID and session key.
+- **Claude usage:** give each account an alias, then paste its browser cookie or enter its organization
+  ID and session key. Existing credentials are migrated to the alias `default`; stored keys are never
+  rendered back into the web page.
 - **Codex usage:** relay the access token from a logged-in Codex computer. Follow the
   [Codex usage relay guide](docs/codex-usage-relay.md).
 
