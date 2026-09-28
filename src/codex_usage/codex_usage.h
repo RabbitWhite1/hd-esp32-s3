@@ -22,6 +22,7 @@ void codexUsageFetch();    // fetch + parse into a staging slot (call when Wi-Fi
 bool codexUsageCommit();   // loop task: promote a staged result; true if it did
 void codexUsageUpdate();   // Fetch + Commit, for callers already on the loop task
 bool codexUsageOk();       // true if the most recent fetch succeeded
+const char *codexUsageStatus();  // credential-safe fetch state for the web UI/LCD
 float codexPrimaryPercent();     // primary window utilization, percent (NAN if unknown)
 float codexSecondaryPercent();   // secondary window utilization, percent (NAN if unknown)
 int codexPrimaryWindowMin();     // primary window length in minutes (0 = none reported)

@@ -13,13 +13,27 @@
 
 // Trust anchor for the HTTPS fetch. This request mails the OAuth access token, so
 // (like the Claude fetch, and unlike the public weather/asset reads) the TLS chain
-// MUST be validated. chatgpt.com's current chain is:
+// MUST be validated. chatgpt.com has moved between two certificate chains:
+//   leaf -> Google Trust Services WE1 -> GTS Root R4
 //   leaf -> Let's Encrypt YE1 -> Root YE -> ISRG Root X2 -> ISRG Root X1
-// Pinning the long-lived X1 root (valid to 2035) survives leaf/intermediate
-// renewals; it only needs updating if OpenAI switches certificate authority.
+// Trust both long-lived roots so an edge-certificate rotation does not blank the
+// display again. WiFiClientSecure accepts concatenated PEM trust anchors.
 // Verify with:
 //   openssl s_client -connect chatgpt.com:443 -servername chatgpt.com -showcerts
-static const char CHATGPT_ROOT_CA[] PROGMEM = R"EOF(
+static const char CHATGPT_ROOT_CAS[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD
+VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG
+A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw
+WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz
+IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi
+AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi
+QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR
+HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
+BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D
+9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8
+p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
+-----END CERTIFICATE-----
 -----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
 TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
@@ -67,21 +81,48 @@ static time_t tokenExp = 0;  // "exp" claim of the token above (0 = unknown)
 // claude_usage.cpp. planType is a String, so it matters that only the loop task
 // ever writes the copy the renderer reads: promoting by value in Commit() means
 // codexPlanType()'s c_str() can never point at a buffer the fetch just freed.
+enum FetchStatus : uint8_t {
+  FETCH_NOT_RUN,
+  FETCH_OK,
+  FETCH_TOKEN_EXPIRED,
+  FETCH_NETWORK_ERROR,
+  FETCH_AUTH_ERROR,
+  FETCH_RATE_LIMITED,
+  FETCH_HTTP_ERROR,
+  FETCH_JSON_ERROR,
+  FETCH_RESPONSE_CHANGED,
+};
+
 struct Usage {
   bool ok;
+  uint8_t status;
   float primaryPct, secondaryPct;
   int primaryWinMin, secondaryWinMin;
   String planType;
   time_t asOf;  // wall-clock time of the last successful fetch
 };
-static Usage live = {false, NAN, NAN, 0, 0, "", 0};
-static Usage staged = {false, NAN, NAN, 0, 0, "", 0};
+static Usage live = {false, FETCH_NOT_RUN, NAN, NAN, 0, 0, "", 0};
+static Usage staged = {false, FETCH_NOT_RUN, NAN, NAN, 0, 0, "", 0};
 static SyncFlag pending;
 
 // A failed fetch stages "not ok" while keeping the last good numbers, so the UI
 // shows a stale reading rather than blanking out.
-static void stageFailure();
+static void stageFailure(uint8_t status);
 static const char *windowLabel(int minutes, int slot);  // defined below, used when logging a fetch
+
+static const char *statusText(uint8_t status) {
+  switch (status) {
+    case FETCH_OK: return "ok";
+    case FETCH_TOKEN_EXPIRED: return "access token expired";
+    case FETCH_NETWORK_ERROR: return "network/TLS error";
+    case FETCH_AUTH_ERROR: return "authorization failed";
+    case FETCH_RATE_LIMITED: return "rate limited";
+    case FETCH_HTTP_ERROR: return "service error";
+    case FETCH_JSON_ERROR: return "invalid response";
+    case FETCH_RESPONSE_CHANGED: return "API response changed";
+    default: return "not fetched yet";
+  }
+}
 
 // Decode one base64url segment (RFC 4648 §5, unpadded) as used by JWTs. Returns
 // "" if the input holds a character outside the alphabet.
@@ -146,15 +187,16 @@ void codexUsageFetch() {
   if (codexTokenExpired()) {
     logWarn("Codex usage: access token expired -- re-run the relay "
             "(README section \"Codex usage relay\")");
-    stageFailure();
+    stageFailure(FETCH_TOKEN_EXPIRED);
     return;
   }
   WiFiClientSecure client;
-  client.setCACert(CHATGPT_ROOT_CA);  // validate the chain: this request carries the token
+  client.setCACert(CHATGPT_ROOT_CAS);  // validate either observed chain; this request carries the token
 
   HTTPClient http;
   if (!http.begin(client, USAGE_URL)) {
     logError("Codex usage: TLS begin failed (cert/clock/CA?)");
+    stageFailure(FETCH_NETWORK_ERROR);
     return;
   }
   http.addHeader("Authorization", String("Bearer ") + accessToken);
@@ -166,7 +208,10 @@ void codexUsageFetch() {
   if (code != 200) {
     logError("Codex usage HTTP %d", code);
     http.end();
-    stageFailure();
+    if (code < 0) stageFailure(FETCH_NETWORK_ERROR);
+    else if (code == 401 || code == 403) stageFailure(FETCH_AUTH_ERROR);
+    else if (code == 429) stageFailure(FETCH_RATE_LIMITED);
+    else stageFailure(FETCH_HTTP_ERROR);
     return;
   }
   String payload = http.getString();
@@ -175,7 +220,7 @@ void codexUsageFetch() {
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     logError("Codex usage JSON parse failed");
-    stageFailure();
+    stageFailure(FETCH_JSON_ERROR);
     return;
   }
   JsonVariantConst rl = doc["rate_limit"];
@@ -184,6 +229,7 @@ void codexUsageFetch() {
   readWindow(rl["secondary_window"], &u.secondaryPct, &u.secondaryWinMin);
   u.planType = doc["plan_type"] | "";
   u.ok = !isnan(u.primaryPct) || !isnan(u.secondaryPct);
+  u.status = u.ok ? FETCH_OK : FETCH_RESPONSE_CHANGED;
   u.asOf = u.ok ? time(nullptr) : live.asOf;  // keep the old timestamp on a bad payload
   if (u.ok)
     logInfo("Codex usage (%s): %s %.0f%%  %s %.0f%%", u.planType.c_str(),
@@ -195,9 +241,10 @@ void codexUsageFetch() {
   pending.set();
 }
 
-static void stageFailure() {
+static void stageFailure(uint8_t status) {
   staged = live;
   staged.ok = false;
+  staged.status = status;
   pending.set();
 }
 
@@ -219,6 +266,9 @@ void codexUsageUpdate() {
 
 bool codexUsageOk() {
   return live.ok;
+}
+const char *codexUsageStatus() {
+  return statusText(live.status);
 }
 float codexPrimaryPercent() {
   return live.primaryPct;

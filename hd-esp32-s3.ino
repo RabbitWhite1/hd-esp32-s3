@@ -437,6 +437,10 @@ void drawOverview(int mx, int lineW) {
     u8g2->drawStr(gaugeX, 245, codexUsageHasToken() ? "access token expired"
                                                     : "no access token relayed yet");
     u8g2->drawStr(gaugeX, 256, "see README: Codex usage relay");
+  } else if (!codexUsageOk() && isnan(codexPrimaryPercent()) &&
+             isnan(codexSecondaryPercent())) {
+    u8g2->setFont(u8g2_font_5x7_tf);
+    u8g2->drawStr(gaugeX, 248, codexUsageStatus());
   } else if (codexSecondaryWindowMin() > 0) {
     drawUsageBar(gaugeX, 236, gaugeW, codexPrimaryLabel(), codexPrimaryPercent());
     drawUsageBar(gaugeX, 252, gaugeW, codexSecondaryLabel(), codexSecondaryPercent());

@@ -673,6 +673,10 @@ static void handleRoot() {
     html += "Set up the hourly relay &mdash; see <strong>Codex usage relay</strong> in the "
             "README, or use <em>Keep it fresh automatically</em> below &mdash; or paste a "
             "token here now.</div>";
+  } else if (!codexUsageOk()) {
+    html += "<div class='alert alert-warning py-2'>Usage fetch: ";
+    html += htmlEscape(codexUsageStatus());
+    html += ". The access token itself is present and has not expired.</div>";
   }
   // The stored token is never written into the page, so it can't be read back off
   // the LAN; leave the box blank to keep the current one.
