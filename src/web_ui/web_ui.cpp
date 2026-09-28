@@ -565,7 +565,7 @@ static void handleRoot() {
       html += String(claudeSevenDay(i), 0);
       html += "%";
     } else {
-      html += "usage unavailable";
+      html += htmlEscape(claudeUsageStatus(i));
     }
     html += "</span><button type='button' class='btn btn-sm btn-outline-secondary' "
             "onclick='editClaudeAlias(this)' title='Edit alias' aria-label='Edit alias'>&#x270E;</button>"

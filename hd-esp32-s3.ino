@@ -410,8 +410,16 @@ void drawOverview(int mx, int lineW) {
     snprintf(claudeTitle, sizeof(claudeTitle), "Claude Usage");
   drawUsageHeading(mx, 184, claudeTitle, claudeUsageAsOf(claudeIdx));
   u8g2->drawXBMP(mx, 202 - CLAWD_ICON_H / 2, CLAWD_ICON_W, CLAWD_ICON_H, clawd_icon_bits);
-  drawUsageBar(gaugeX, 190, gaugeW, "5h", claudeFiveHour(claudeIdx));
-  drawUsageBar(gaugeX, 206, gaugeW, "7d", claudeSevenDay(claudeIdx));
+  if (claudeIdx >= 0 && !claudeUsageOk(claudeIdx) &&
+      isnan(claudeFiveHour(claudeIdx)) && isnan(claudeSevenDay(claudeIdx))) {
+    u8g2->setFont(u8g2_font_5x7_tf);
+    u8g2->drawStr(gaugeX, 202, claudeUsageStatus(claudeIdx));
+  } else {
+    // A failed refresh keeps the last successful figures visible; the heading's
+    // timestamp makes their age explicit while the web UI shows the fetch error.
+    drawUsageBar(gaugeX, 190, gaugeW, "5h", claudeFiveHour(claudeIdx));
+    drawUsageBar(gaugeX, 206, gaugeW, "7d", claudeSevenDay(claudeIdx));
+  }
 
   // Codex reports its windows generically (their lengths vary by plan, and Plus
   // has no secondary one), so the labels come from the reported window lengths;

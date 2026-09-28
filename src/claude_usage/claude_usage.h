@@ -24,6 +24,9 @@ int claudeUsageMaxAccounts();
 int claudeUsageDisplayIndex();  // pinned index 0, or -1 when nothing is configured
 const String &claudeUsageAlias(int idx);
 bool claudeUsageOk(int idx);
+// Short, credential-safe fetch state for the web UI/LCD (for example
+// "session expired", "Cloudflare blocked", or "response changed").
+const char *claudeUsageStatus(int idx);
 float claudeFiveHour(int idx);
 float claudeSevenDay(int idx);
 time_t claudeUsageAsOf(int idx);

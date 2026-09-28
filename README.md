@@ -51,7 +51,8 @@ button plays the refresh sounds.
   edited lines appear in an on-screen popup.
 - **Claude usage:** give each account an alias, then paste its browser cookie or enter its organization
   ID and session key. Existing credentials are migrated to the alias `default`; stored keys are never
-  rendered back into the web page.
+  rendered back into the web page. The device follows session-key renewals returned by Claude, but a
+  session invalidated by logout still needs a freshly pasted cookie.
 - **Codex usage:** relay the access token from a logged-in Codex computer. Follow the
   [Codex usage relay guide](docs/codex-usage-relay.md).
 

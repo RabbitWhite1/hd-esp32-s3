@@ -60,8 +60,22 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 // never restages while it is set, so neither side needs a lock.
 struct Usage {
   bool ok;
+  uint8_t status;
   float fiveHour, sevenDay;
   time_t asOf;  // wall-clock time of the last successful fetch
+};
+
+enum FetchStatus : uint8_t {
+  FETCH_NOT_RUN,
+  FETCH_OK,
+  FETCH_MISSING_CREDENTIALS,
+  FETCH_NETWORK_ERROR,
+  FETCH_AUTH_EXPIRED,
+  FETCH_CLOUDFLARE_BLOCKED,
+  FETCH_RATE_LIMITED,
+  FETCH_HTTP_ERROR,
+  FETCH_JSON_ERROR,
+  FETCH_RESPONSE_CHANGED,
 };
 static const int MAX_ACCOUNTS = 8;
 static const int MAX_ALIAS_LEN = 24;
@@ -77,20 +91,71 @@ static Account accounts[MAX_ACCOUNTS];
 static int accountCount = 0;
 static Usage staged[MAX_ACCOUNTS];
 static String stagedAlias[MAX_ACCOUNTS];
+static String stagedRenewedKey[MAX_ACCOUNTS];
 static int stagedCount = 0;
 static SyncFlag pending;
 
 static Usage emptyUsage() {
-  Usage u = {false, NAN, NAN, 0};
+  Usage u = {false, FETCH_NOT_RUN, NAN, NAN, 0};
   return u;
 }
 
+static const char *statusText(uint8_t status) {
+  switch (status) {
+    case FETCH_OK: return "ok";
+    case FETCH_MISSING_CREDENTIALS: return "credentials missing";
+    case FETCH_NETWORK_ERROR: return "network/TLS error";
+    case FETCH_AUTH_EXPIRED: return "session expired";
+    case FETCH_CLOUDFLARE_BLOCKED: return "Cloudflare blocked";
+    case FETCH_RATE_LIMITED: return "rate limited";
+    case FETCH_HTTP_ERROR: return "service error";
+    case FETCH_JSON_ERROR: return "invalid response";
+    case FETCH_RESPONSE_CHANGED: return "API response changed";
+    default: return "not fetched yet";
+  }
+}
+
+// ArduinoJson accepts numeric JSON values directly. Be a little more tolerant
+// here because this undocumented endpoint has also emitted stringified numbers.
+static float jsonNumber(JsonVariantConst value) {
+  if (value.is<float>() || value.is<double>() || value.is<long>() || value.is<int>())
+    return value.as<float>();
+  if (value.is<const char *>()) {
+    const char *s = value.as<const char *>();
+    if (!s || !*s) return NAN;
+    char *end = nullptr;
+    float n = strtof(s, &end);
+    return end != s && *end == '\0' ? n : NAN;
+  }
+  return NAN;
+}
+
+static uint8_t failedStatus(int code, const String &payload) {
+  if (code == 401 || code == 403) {
+    // Claude returns JSON for an invalid login session. Cloudflare challenges
+    // are HTML, even though both commonly use HTTP 403.
+    String trimmed = payload;
+    trimmed.trim();
+    if (trimmed.startsWith("<") || trimmed.indexOf("cloudflare") >= 0)
+      return FETCH_CLOUDFLARE_BLOCKED;
+    return FETCH_AUTH_EXPIRED;
+  }
+  if (code == 429) return FETCH_RATE_LIMITED;
+  return FETCH_HTTP_ERROR;
+}
+
+static String cookieValue(const String &cookie, const char *name);
+
 // Fetch one account. A failed request returns the previous figures marked stale,
 // so a temporary outage does not erase the last useful reading.
-static Usage fetchAccount(const Account &account) {
+static Usage fetchAccount(const Account &account, String &renewedKey) {
   Usage u = account.live;
   u.ok = false;
-  if (account.sessionKey.length() == 0 || account.orgId.length() == 0) return u;
+  renewedKey = "";
+  if (account.sessionKey.length() == 0 || account.orgId.length() == 0) {
+    u.status = FETCH_MISSING_CREDENTIALS;
+    return u;
+  }
 
   WiFiClientSecure client;
   client.setCACert(ISRG_ROOT_X1);  // validate the chain: this request carries the sessionKey
@@ -100,34 +165,72 @@ static Usage fetchAccount(const Account &account) {
   HTTPClient http;
   if (!http.begin(client, url)) {
     logError("Claude usage [%s]: TLS begin failed (cert/clock/CA?)", account.alias.c_str());
+    u.status = FETCH_NETWORK_ERROR;
     return u;
   }
   http.addHeader("Cookie", String("sessionKey=") + account.sessionKey);
-  http.addHeader("Accept", "application/json");
-  // Browser-like UA reduces the chance of being bounced by anti-bot filtering.
-  http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+  // Mirror the stable part of claude.ai's own browser request. In particular,
+  // the platform and fetch-metadata headers distinguish this from a generic bot
+  // request at the Cloudflare edge. Force identity encoding because HTTPClient
+  // does not decode gzip/brotli response bodies.
+  http.addHeader("Accept", "*/*");
+  http.addHeader("Accept-Language", "en-US,en;q=0.9");
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Origin", "https://claude.ai");
+  http.addHeader("Referer", "https://claude.ai/settings/usage");
+  http.addHeader("anthropic-client-platform", "web_claude_ai");
+  http.addHeader("anthropic-client-version", "1.0.0");
+  http.addHeader("sec-fetch-dest", "empty");
+  http.addHeader("sec-fetch-mode", "cors");
+  http.addHeader("sec-fetch-site", "same-origin");
+  http.addHeader("Cache-Control", "no-cache");
+  http.addHeader("Pragma", "no-cache");
+  http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36");
+  http.setTimeout(15000);
+
+  // Claude may renew the login cookie on a successful authenticated request.
+  // Capture it so the device does not keep presenting the now-stale value.
+  const char *responseHeaders[] = {"Set-Cookie"};
+  http.collectHeaders(responseHeaders, 1);
 
   int code = http.GET();
+  String payload = http.getString();  // error JSON/HTML is needed for classification
+
+  if (http.hasHeader("Set-Cookie")) {
+    String setCookie = http.header("Set-Cookie");
+    String key = cookieValue(setCookie, "sessionKey");
+    if (key.length() > 20 && key != account.sessionKey) renewedKey = key;
+  }
+
   if (code != 200) {
-    logError("Claude usage [%s] HTTP %d", account.alias.c_str(), code);
+    u.status = code < 0 ? FETCH_NETWORK_ERROR : failedStatus(code, payload);
+    logError("Claude usage [%s] HTTP %d (%s)", account.alias.c_str(), code,
+             statusText(u.status));
     http.end();
     return u;
   }
-  String payload = http.getString();
   http.end();
 
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     logError("Claude usage [%s]: JSON parse failed", account.alias.c_str());
+    u.status = FETCH_JSON_ERROR;
     return u;
   }
-  u.fiveHour = doc["five_hour"]["utilization"] | NAN;
-  u.sevenDay = doc["seven_day"]["utilization"] | NAN;
+  u.fiveHour = jsonNumber(doc["five_hour"]["utilization"]);
+  u.sevenDay = jsonNumber(doc["seven_day"]["utilization"]);
   u.ok = !isnan(u.fiveHour) || !isnan(u.sevenDay);
+  u.status = u.ok ? FETCH_OK : FETCH_RESPONSE_CHANGED;
   u.asOf = u.ok ? time(nullptr) : account.live.asOf;
   if (u.ok)
     logInfo("Claude usage [%s]: 5h %.0f%%  7d %.0f%%", account.alias.c_str(),
             u.fiveHour, u.sevenDay);
+  else
+    logError("Claude usage [%s]: response has no five_hour/seven_day utilization",
+             account.alias.c_str());
   return u;
 }
 
@@ -137,7 +240,7 @@ void claudeUsageFetch() {
   stagedCount = accountCount;
   for (int i = 0; i < stagedCount; i++) {
     stagedAlias[i] = accounts[i].alias;
-    staged[i] = fetchAccount(accounts[i]);
+    staged[i] = fetchAccount(accounts[i], stagedRenewedKey[i]);
   }
   pending.set();
 }
@@ -147,15 +250,24 @@ void claudeUsageFetch() {
 bool claudeUsageCommit() {
   if (!pending.isSet()) return false;
   bool changed = false;
+  bool credentialsChanged = false;
   for (int i = 0; i < stagedCount; i++) {
     for (int j = 0; j < accountCount; j++) {
       if (accounts[j].alias != stagedAlias[i]) continue;
       accounts[j].live = staged[i];
+      if (stagedRenewedKey[i].length() > 0 &&
+          stagedRenewedKey[i] != accounts[j].sessionKey) {
+        accounts[j].sessionKey = stagedRenewedKey[i];
+        credentialsChanged = true;
+        logInfo("Claude usage [%s]: session cookie renewed", accounts[j].alias.c_str());
+      }
       changed = true;
       break;
     }
   }
   pending.clear();
+  if (credentialsChanged && !claudeUsageSave())
+    logError("Claude session renewal could not be persisted");
   return changed;
 }
 
@@ -181,6 +293,10 @@ const String &claudeUsageAlias(int idx) {
 }
 bool claudeUsageOk(int idx) {
   return idx >= 0 && idx < accountCount && accounts[idx].live.ok;
+}
+const char *claudeUsageStatus(int idx) {
+  return idx >= 0 && idx < accountCount ? statusText(accounts[idx].live.status)
+                                         : "not configured";
 }
 float claudeFiveHour(int idx) {
   return idx >= 0 && idx < accountCount ? accounts[idx].live.fiveHour : NAN;
