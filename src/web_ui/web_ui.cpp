@@ -226,6 +226,23 @@ class ChunkedHtml {
   }
 };
 
+// Each integration saves its interval independently of its credentials or URL.
+static void appendRefreshInterval(ChunkedHtml &html, const char *name, int minutes) {
+  html += "<form action='/intervals' method='POST' class='border-top mt-3 pt-3'>"
+          "<label class='form-label' for='";
+  html += name;
+  html += "interval'>Refresh interval</label><div class='input-group'>"
+          "<input type='number' class='form-control' min='1' required id='";
+  html += name;
+  html += "interval' name='";
+  html += name;
+  html += "' value='";
+  html += minutes;
+  html += "'><span class='input-group-text text-muted'>min</span>"
+          "<button type='submit' class='btn btn-outline-primary'>Save interval</button>"
+          "</div></form>";
+}
+
 // Minimal, dependency-free page served at "/" while the device is in SoftAP
 // setup mode (no saved network reachable, so no internet to load Bootstrap). A
 // phone joins the open setup AP, picks a scanned network (or types one), enters
@@ -427,7 +444,6 @@ static void handleRoot() {
           "<a class='nav-link' href='#gdoc'>Google Doc</a>"
           "<a class='nav-link' href='#tz'>Time zones</a>"
           "<a class='nav-link' href='#weather'>Weather cities</a>"
-          "<a class='nav-link' href='#intervals'>Refresh intervals</a>"
           "<a class='nav-link' href='#claude'>Claude usage</a>"
           "<a class='nav-link' href='#codex'>Codex usage</a>"
           "<a class='nav-link' href='#mdns'>mDNS name</a>"
@@ -444,6 +460,7 @@ static void handleRoot() {
           "<input type='text' class='form-control' name='url' value='";
   html += htmlEscape(gdocUrl());
   html += "'></form>";
+  appendRefreshInterval(html, "gdoc", gdocIntervalMin());
   html += cardClose;
 
   // Time zones: two dropdowns (primary shown first, secondary in parentheses on
@@ -518,24 +535,6 @@ static void handleRoot() {
     html += weatherMaxCities();
     html += " cities)</p>";
   }
-  html += cardClose;
-
-  // Auto-refresh intervals (minutes), persisted to esp32.json. Each input shows a
-  // non-editable light-grey "min" suffix.
-  html += cardOpen("intervals", "Refresh intervals", saveBtn("intervalsform"));
-  html += "<form id='intervalsform' action='/intervals' method='POST' class='row g-3'>"
-          "<div class='col-sm-4'><label class='form-label'>Claude usage</label>"
-          "<div class='input-group'><input type='number' class='form-control' name='claude' min='1' value='";
-  html += claudeUsageIntervalMin();
-  html += "'><span class='input-group-text text-muted'>min</span></div></div>"
-          "<div class='col-sm-4'><label class='form-label'>Codex usage</label>"
-          "<div class='input-group'><input type='number' class='form-control' name='codex' min='1' value='";
-  html += codexUsageIntervalMin();
-  html += "'><span class='input-group-text text-muted'>min</span></div></div>"
-          "<div class='col-sm-4'><label class='form-label'>Google Doc</label>"
-          "<div class='input-group'><input type='number' class='form-control' name='gdoc' min='1' value='";
-  html += gdocIntervalMin();
-  html += "'><span class='input-group-text text-muted'>min</span></div></div></form>";
   html += cardClose;
 
   // Claude usage credentials (kept in RAM on the device, never in the firmware).
@@ -629,6 +628,7 @@ static void handleRoot() {
           "for the Cookie tab &mdash; or read off <code>sessionKey</code> and <code>lastActiveOrg</code> "
           "for the Org ID + key tab.</li>"
           "</ol></details>";
+  appendRefreshInterval(html, "claude", claudeUsageIntervalMin());
   html += cardClose;
 
   // Codex usage. Unlike the Claude card there is nothing to copy out of a browser:
@@ -702,6 +702,7 @@ static void handleRoot() {
   html += "</code></pre>"
           "<p class='form-text mb-0'>Remove it again with "
           "<code>crontab -l | grep -v codextoken | crontab -</code>.</p></details>";
+  appendRefreshInterval(html, "codex", codexUsageIntervalMin());
   html += cardClose;
 
   // mDNS host label persisted in esp32.json. The suffix is deliberately a

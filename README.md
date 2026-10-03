@@ -24,7 +24,8 @@ device.
 4. On the same LAN, open [http://esp32.local](http://esp32.local). If mDNS is unavailable, use the IP
    address shown by the device or in the serial log.
 5. Open **Configuration** to choose time zones and cities and, if wanted, configure the Google Doc,
-   Claude usage, Codex usage, refresh intervals, mDNS name, and firmware source. The mDNS field edits
+   Claude usage, Codex usage, mDNS name, and firmware source. Each integration section has its own
+   refresh interval setting. The mDNS field edits
    only the label before the fixed `.local` suffix; its default is `esp32.local`.
 
 The web UI has no user login, and integration credentials are stored on the SD card. Keep the device
